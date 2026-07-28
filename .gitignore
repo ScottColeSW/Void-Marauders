@@ -1,0 +1,16 @@
+# Python build and virtual environments
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local environment variables / secrets
+.env
+
+# Godot specific overrides and metadata
+.godot/
+*.uid
+.import/
+export_presets.cfg
