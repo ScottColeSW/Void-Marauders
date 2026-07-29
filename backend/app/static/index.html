@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Void Marauders — Colony Observer</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>VOID MARAUDERS <span class="subtitle">// COLONY OBSERVER</span></h1>
+    <div class="tick">TICK <span id="tick-count">0</span></div>
+  </header>
+
+  <section id="resources" class="stat-row"></section>
+
+  <main>
+    <section class="panel" id="sectors-panel">
+      <h2>Sectors</h2>
+      <div id="sectors" class="card-grid"></div>
+    </section>
+
+    <section class="panel" id="colonists-panel">
+      <h2>Colonists</h2>
+      <div id="colonists" class="card-grid"></div>
+    </section>
+  </main>
+
+  <section class="panel" id="events-panel">
+    <h2>Event Feed</h2>
+    <div id="events" class="event-log"></div>
+  </section>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

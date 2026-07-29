@@ -1,0 +1,193 @@
+:root {
+  color-scheme: dark;
+  --bg: #0a0e0c;
+  --panel-bg: #101512;
+  --border: #23342c;
+  --text: #c8e6d8;
+  --text-dim: #6f8f81;
+  --accent: #4ee08a;
+  --amber: #e0b84e;
+  --danger: #e0574e;
+  --loyalty: #4ea8e0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Cascadia Code", "Consolas", "Courier New", monospace;
+  padding: 1.25rem 1.5rem 3rem;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+h1 {
+  font-size: 1.3rem;
+  letter-spacing: 0.05em;
+  margin: 0;
+  color: var(--accent);
+}
+
+.subtitle {
+  color: var(--text-dim);
+  font-weight: normal;
+  font-size: 0.9rem;
+}
+
+.tick {
+  color: var(--amber);
+  font-size: 1rem;
+}
+
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.stat-tile {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.6rem 0.9rem;
+}
+
+.stat-tile .label {
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.stat-tile .value {
+  font-size: 1.4rem;
+  color: var(--accent);
+}
+
+main {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 1.5rem;
+}
+
+@media (max-width: 900px) {
+  main {
+    grid-template-columns: 1fr;
+  }
+}
+
+.panel h2 {
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin: 0 0 0.6rem;
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0.75rem;
+}
+
+.card {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.65rem 0.8rem;
+  font-size: 0.85rem;
+}
+
+.card .card-title {
+  font-weight: bold;
+  color: var(--accent);
+  margin-bottom: 0.3rem;
+}
+
+.card.unexplored {
+  opacity: 0.55;
+  border-style: dashed;
+}
+
+.card.threat {
+  border-color: var(--danger);
+}
+
+.card-row {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-dim);
+}
+
+.bar {
+  height: 6px;
+  border-radius: 3px;
+  background: #1c2620;
+  margin: 0.2rem 0 0.4rem;
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+}
+
+.bar-fill.health {
+  background: var(--accent);
+}
+
+.bar-fill.loyalty {
+  background: var(--loyalty);
+}
+
+.captain-badge {
+  display: inline-block;
+  color: var(--amber);
+  border: 1px solid var(--amber);
+  border-radius: 3px;
+  font-size: 0.65rem;
+  padding: 0.05rem 0.3rem;
+  vertical-align: middle;
+  letter-spacing: 0.05em;
+}
+
+.bar-fill.stress {
+  background: var(--amber);
+}
+
+.dialogue {
+  color: var(--text);
+  font-style: italic;
+  margin-top: 0.3rem;
+  font-size: 0.8rem;
+}
+
+#events-panel {
+  margin-top: 1.5rem;
+}
+
+.event-log {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.6rem 0.9rem;
+  height: 220px;
+  overflow-y: auto;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.event-log div:last-child {
+  color: var(--accent);
+}
