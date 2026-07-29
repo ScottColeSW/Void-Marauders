@@ -1,0 +1,15 @@
+{
+  "agent_id": "engineer_karl",
+  "current_room": "engine_room",
+  "ship_status": {
+    "oxygen": "42%", 
+    "hull_breach": "True",
+    "power_grid": "Failing"
+  },
+  "crew_in_room": ["pilot_valerie"],
+  "inventory": ["plasma_torch", "synthetic_cigar"],
+  "psych_eval": {
+    "stress_level": "8/10",
+    "dominant_trait": "Paranoid Paranoid"
+  }
+}

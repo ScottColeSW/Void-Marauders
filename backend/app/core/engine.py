@@ -1,0 +1,372 @@
+import os
+import random
+import threading
+import time
+import uuid
+from typing import Optional
+
+from app.core import cognition
+from app.core.world_seed import create_initial_world
+from app.database import connection as memory_db
+from app.schemas.agent import (
+    ActionType,
+    AgentActionSchema,
+    AgentPerception,
+    AgentState,
+    PendingOrder,
+)
+from app.schemas.world import AlienEntity, SectorType, StructureEntity, WorldState
+
+MAX_EVENT_LOG = 200
+BUILD_PROGRESS_PER_ACTION = 25
+STRUCTURE_METAL_COST = 15
+ALIEN_ATTACK_DAMAGE = 10
+WEAPON_DAMAGE = 15
+PASSIVE_BUILD_PROGRESS = 5
+EXPLORE_ALIEN_ENCOUNTER_CHANCE = 0.25
+
+MEMORY_ENABLED = os.getenv("MEMORY_ENABLED", "true").lower() == "true"
+MEMORY_FAILURE_COOLDOWN_SECONDS = 30
+_memory_warning_logged = False
+_memory_unavailable_until: float = 0.0
+
+
+class WorldEngine:
+    """Owns the single in-memory colony simulation and advances it tick by tick."""
+
+    def __init__(self):
+        self.world, self.agents = create_initial_world()
+        # The background auto-tick loop (event loop thread) and the manual
+        # POST /tick endpoint (FastAPI threadpool thread) can both call tick()
+        # concurrently — serialize them so they never mutate world state at once.
+        self._lock = threading.Lock()
+        self._low_loyalty_flagged: set = set()
+
+    def tick(self) -> WorldState:
+        with self._lock:
+            self._environment_step()
+            self._agent_step()
+            self.world.tick += 1
+            self._trim_log()
+            return self.world
+
+    # -- logging -----------------------------------------------------------
+
+    def _log(self, message: str) -> None:
+        self.world.event_log.append(f"[tick {self.world.tick}] {message}")
+
+    def _trim_log(self) -> None:
+        if len(self.world.event_log) > MAX_EVENT_LOG:
+            self.world.event_log = self.world.event_log[-MAX_EVENT_LOG:]
+
+    # -- environment (no LLM) -----------------------------------------------
+
+    def _environment_step(self) -> None:
+        for alien in list(self.world.aliens.values()):
+            occupants = [
+                a
+                for a in self.agents.values()
+                if a.current_sector == alien.sector_id and a.health > 0
+            ]
+            if occupants:
+                target = random.choice(occupants)
+                target.health = max(0, target.health - ALIEN_ATTACK_DAMAGE)
+                target.stress_level = min(10, target.stress_level + 1)
+                self._log(
+                    f"A creature at {alien.sector_id} attacks {target.profile.name} "
+                    f"for {ALIEN_ATTACK_DAMAGE} damage."
+                )
+
+        for structure in self.world.structures.values():
+            if structure.build_progress < 100:
+                structure.build_progress = min(
+                    100, structure.build_progress + PASSIVE_BUILD_PROGRESS
+                )
+                if structure.build_progress == 100:
+                    self._log(
+                        f"{structure.structure_type} at {structure.sector_id} construction complete."
+                    )
+
+    # -- agents (cognition) --------------------------------------------------
+
+    def _agent_step(self) -> None:
+        for agent in self.agents.values():
+            if agent.health <= 0:
+                continue
+            if agent.pending_order and self._resolve_pending_order(agent):
+                continue  # complied — this tick's turn is already spent
+            perception = self._build_perception(agent)
+            action = cognition.decide(agent, perception, self.world)
+            if action.spoken_dialogue:
+                self._log(f'{agent.profile.name}: "{action.spoken_dialogue}"')
+            self._resolve_action(agent, action)
+            self._remember_action(agent, action)
+
+    # -- chain of command ----------------------------------------------------
+
+    def _resolve_pending_order(self, agent: AgentState) -> bool:
+        """Roll compliance for a pending captain order. Returns True if it
+        consumed this agent's turn (complied), False if they act on their own."""
+        order = agent.pending_order
+        agent.pending_order = None
+        captain = self.agents.get(order.captain_id)
+        captain_name = captain.profile.name if captain else "the captain"
+
+        if random.random() < (agent.loyalty / 10):
+            agent.loyalty = min(10, agent.loyalty + 1)
+            self._log(
+                f"{agent.profile.name} follows {captain_name}'s order: "
+                f"{order.action_type.value}."
+            )
+            action = self._mechanical_order_action(agent, order.action_type)
+            self._resolve_action(agent, action)
+            self._remember_action(agent, action)
+            return True
+
+        agent.loyalty = max(0, agent.loyalty - 1)
+        self._log(f"{agent.profile.name} ignores {captain_name}'s order.")
+        if agent.loyalty <= 2 and agent.profile.agent_id not in self._low_loyalty_flagged:
+            self._low_loyalty_flagged.add(agent.profile.agent_id)
+            self._log(
+                f"{agent.profile.name} openly defies {captain_name} — "
+                "the crew's faith in command is cracking."
+            )
+        return False
+
+    def _mechanical_order_action(
+        self, agent: AgentState, action_type: ActionType
+    ) -> AgentActionSchema:
+        """Construct a sensible action for a complied-with order without going
+        through cognition — the agent isn't deciding, they're following orders."""
+        target_id = None
+        if action_type == ActionType.FIRE_WEAPON:
+            nearby_aliens = [
+                a.alien_id
+                for a in self.world.aliens.values()
+                if a.sector_id == agent.current_sector
+            ]
+            target_id = nearby_aliens[0] if nearby_aliens else None
+        elif action_type in (ActionType.GATHER_RESOURCE, ActionType.EXPLORE_SECTOR):
+            target_id = agent.current_sector
+        elif action_type == ActionType.BUILD_STRUCTURE:
+            target_id = "new:habitat"
+        elif action_type == ActionType.REPAIR_STRUCTURE:
+            for structure in self.world.structures.values():
+                if structure.sector_id == agent.current_sector and structure.hp < 100:
+                    target_id = structure.structure_id
+                    break
+
+        return AgentActionSchema(
+            inner_monologue=f"{agent.profile.name} complies with the order.",
+            spoken_dialogue=None,
+            action_type=action_type,
+            target_id=target_id,
+        )
+
+    def _build_perception(self, agent: AgentState) -> AgentPerception:
+        nearby_crew = [
+            other.profile.agent_id
+            for other in self.agents.values()
+            if other.profile.agent_id != agent.profile.agent_id
+            and other.current_sector == agent.current_sector
+            and other.health > 0
+        ]
+        nearby_aliens = [
+            alien.alien_id
+            for alien in self.world.aliens.values()
+            if alien.sector_id == agent.current_sector
+        ]
+        return AgentPerception(
+            agent_id=agent.profile.agent_id,
+            current_sector=agent.current_sector,
+            nearby_crew=nearby_crew,
+            nearby_aliens=nearby_aliens,
+            colony_status=self.world.colony_resources,
+            stress_level=agent.stress_level,
+            retrieved_memories=self._recall_memories(agent, nearby_crew, nearby_aliens),
+        )
+
+    # -- memory (Qdrant, non-fatal on failure) -------------------------------
+
+    def _recall_memories(self, agent: AgentState, nearby_crew, nearby_aliens) -> list:
+        if not MEMORY_ENABLED or self._memory_on_cooldown():
+            return []
+        query_text = (
+            f"sector {agent.current_sector}, crew {nearby_crew}, aliens {nearby_aliens}"
+        )
+        try:
+            return memory_db.query_memories(agent.profile.agent_id, query_text, top_k=5)
+        except Exception as exc:
+            self._memory_failed(exc)
+            return []
+
+    def _remember_action(self, agent: AgentState, action: AgentActionSchema) -> None:
+        if not MEMORY_ENABLED or self._memory_on_cooldown():
+            return
+        text = (
+            f"{action.inner_monologue} Action: {action.action_type.value} "
+            f"target={action.target_id}. Said: '{action.spoken_dialogue}'"
+        )
+        try:
+            memory_db.upsert_memory(agent.profile.agent_id, self.world.tick, text)
+        except Exception as exc:
+            self._memory_failed(exc)
+
+    def _memory_on_cooldown(self) -> bool:
+        # After a failure, skip memory calls entirely for a cooldown window so a
+        # dead Qdrant/Ollama doesn't tax every agent, every tick, with a fresh
+        # connection attempt while it's down.
+        return time.monotonic() < _memory_unavailable_until
+
+    def _memory_failed(self, exc: Exception) -> None:
+        global _memory_warning_logged, _memory_unavailable_until
+        _memory_unavailable_until = time.monotonic() + MEMORY_FAILURE_COOLDOWN_SECONDS
+        if not _memory_warning_logged:
+            self._log(
+                f"[system] Memory store unavailable, retrying in "
+                f"{MEMORY_FAILURE_COOLDOWN_SECONDS}s ({exc})."
+            )
+            _memory_warning_logged = True
+
+    # -- action resolution ---------------------------------------------------
+
+    def _resolve_action(self, agent: AgentState, action: AgentActionSchema) -> None:
+        sector = self.world.sectors.get(agent.current_sector)
+
+        if action.action_type == ActionType.GATHER_RESOURCE and sector:
+            if sector.resource_yield:
+                for resource, amount in sector.resource_yield.items():
+                    current = getattr(self.world.colony_resources, resource.value)
+                    setattr(self.world.colony_resources, resource.value, current + amount)
+                self._log(f"{agent.profile.name} gathers resources from {sector.sector_id}.")
+
+        elif action.action_type == ActionType.EXPLORE_SECTOR:
+            self._resolve_explore(agent, action)
+
+        elif action.action_type == ActionType.RETURN_TO_COLONY:
+            agent.current_sector = "colony_core"
+
+        elif action.action_type == ActionType.BUILD_STRUCTURE:
+            self._resolve_build(agent, action)
+
+        elif action.action_type == ActionType.REPAIR_STRUCTURE and action.target_id:
+            structure = self.world.structures.get(action.target_id)
+            if structure:
+                structure.hp = min(100, structure.hp + 20)
+                self._log(f"{agent.profile.name} repairs the {structure.structure_type}.")
+
+        elif action.action_type == ActionType.REPAIR_HULL:
+            self._log(f"{agent.profile.name} patches up the ship's hull.")
+
+        elif action.action_type == ActionType.FIRE_WEAPON and action.target_id:
+            self._resolve_fire_weapon(agent, action)
+
+        elif action.action_type == ActionType.TAKE_COVER:
+            agent.stress_level = min(10, agent.stress_level + 1)
+
+        elif action.action_type == ActionType.RETREAT:
+            agent.current_sector = "colony_core"
+            self._log(f"{agent.profile.name} retreats to the colony core.")
+
+        elif action.action_type == ActionType.CONFRONT_CREW:
+            agent.stress_level = max(0, agent.stress_level - 2)
+            if action.target_id and action.target_id in self.agents:
+                other = self.agents[action.target_id]
+                other.stress_level = min(10, other.stress_level + 1)
+
+        elif action.action_type == ActionType.REST:
+            agent.health = min(100, agent.health + 15)
+            agent.stress_level = max(0, agent.stress_level - 1)
+
+        elif action.action_type == ActionType.ISSUE_ORDER:
+            self._resolve_issue_order(agent, action)
+
+        # IDLE: no effect on world state
+
+    def _resolve_issue_order(self, agent: AgentState, action: AgentActionSchema) -> None:
+        if not agent.profile.is_captain or not action.order_action:
+            return  # non-captains attempting to issue orders are a safe no-op
+        target = self.agents.get(action.target_id or "")
+        if not target or target.profile.agent_id == agent.profile.agent_id:
+            return
+        target.pending_order = PendingOrder(
+            captain_id=agent.profile.agent_id, action_type=action.order_action
+        )
+        self._log(
+            f"{agent.profile.name} orders {target.profile.name} to "
+            f"{action.order_action.value}."
+        )
+
+    def _resolve_explore(self, agent: AgentState, action: AgentActionSchema) -> None:
+        target_id = action.target_id or agent.current_sector
+        target_sector = self.world.sectors.get(target_id)
+        if target_sector and not target_sector.explored:
+            target_sector.explored = True
+            self._log(f"{agent.profile.name} explores {target_sector.sector_id}.")
+            if (
+                target_sector.sector_type == SectorType.ALIEN_NEST
+                and random.random() < EXPLORE_ALIEN_ENCOUNTER_CHANCE
+            ):
+                alien_id = f"alien_{uuid.uuid4().hex[:6]}"
+                self.world.aliens[alien_id] = AlienEntity(
+                    alien_id=alien_id, sector_id=target_sector.sector_id
+                )
+                self._log(
+                    f"A hostile creature ambushes {agent.profile.name} at {target_sector.sector_id}!"
+                )
+        if target_sector:
+            agent.current_sector = target_sector.sector_id
+
+    def _resolve_build(self, agent: AgentState, action: AgentActionSchema) -> None:
+        resources = self.world.colony_resources
+        target = action.target_id or ""
+
+        if target.startswith("new:"):
+            structure_type = target.split(":", 1)[1] or "habitat"
+            if resources.metal < STRUCTURE_METAL_COST:
+                self._log(
+                    f"{agent.profile.name} wants to build a {structure_type} "
+                    "but there isn't enough metal."
+                )
+                return
+            resources.metal -= STRUCTURE_METAL_COST
+            structure_id = f"{structure_type}_{uuid.uuid4().hex[:6]}"
+            self.world.structures[structure_id] = StructureEntity(
+                structure_id=structure_id,
+                structure_type=structure_type,
+                sector_id=agent.current_sector,
+                build_progress=BUILD_PROGRESS_PER_ACTION,
+            )
+            self._log(
+                f"{agent.profile.name} breaks ground on a new {structure_type} "
+                f"at {agent.current_sector}."
+            )
+        elif target in self.world.structures:
+            structure = self.world.structures[target]
+            structure.build_progress = min(
+                100, structure.build_progress + BUILD_PROGRESS_PER_ACTION
+            )
+            self._log(f"{agent.profile.name} continues building the {structure.structure_type}.")
+
+    def _resolve_fire_weapon(self, agent: AgentState, action: AgentActionSchema) -> None:
+        alien = self.world.aliens.get(action.target_id or "")
+        if not alien:
+            return
+        alien.health -= WEAPON_DAMAGE
+        if alien.health <= 0:
+            del self.world.aliens[alien.alien_id]
+            self._log(f"{agent.profile.name} destroys {alien.alien_id}!")
+        else:
+            self._log(
+                f"{agent.profile.name} fires on {alien.alien_id} ({alien.health} HP left)."
+            )
+
+
+_engine: Optional[WorldEngine] = None
+
+
+def get_engine() -> WorldEngine:
+    global _engine
+    if _engine is None:
+        _engine = WorldEngine()
+    return _engine

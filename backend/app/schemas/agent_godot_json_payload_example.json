@@ -1,0 +1,6 @@
+{
+  "inner_thought": "The life support is failing and Valerie is just standing there. She's going to let me suffocate like she did on Mars.",
+  "dialogue": "Fix the damn thrusters, Valerie, or I swear I'm locking you out of the bridge!",
+  "action": "confront_crew",
+  "target": "pilot_valerie"
+}

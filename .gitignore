@@ -9,6 +9,9 @@ __pycache__/
 # Local environment variables / secrets
 .env
 
+# Qdrant local storage volume
+qdrant_storage/
+
 # Godot specific overrides and metadata
 .godot/
 *.uid
