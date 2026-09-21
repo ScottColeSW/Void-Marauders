@@ -1,5 +1,8 @@
 # 🌌 Void Marauders: AI Agent Colony Sim
 
+[![License](https://img.shields.io/github/license/ScottColeSW/Void-Marauders)](LICENSE)
+[![Latest Release](https://img.shields.io/github/v/release/ScottColeSW/Void-Marauders)](https://github.com/ScottColeSW/Void-Marauders/releases/latest)
+
 An observer-style, autonomous colony simulation. A crew of independent AI agents lands on a hostile world, explores for resources, fights off aliens, and builds up a colony — while you watch it unfold. No cloud API costs: everything runs on local models.
 
 ---
