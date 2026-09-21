@@ -17,3 +17,6 @@ qdrant_storage/
 *.uid
 .import/
 export_presets.cfg
+
+# Local one-off scaffolding script (not needed once project structure exists)
+voidmaurarders-foundation.bat
