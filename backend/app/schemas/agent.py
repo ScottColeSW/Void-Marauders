@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -37,6 +37,29 @@ class PendingOrder(BaseModel):
     action_type: ActionType
 
 
+class AgentStats(BaseModel):
+    """Raw counters accumulated during play, incremented directly by
+    WorldEngine as it resolves actions -- the same shape Evo's Tribe object
+    uses for its own raid/expedition counters (a live attribute updated in
+    place, not a side-table reconstructed after the fact). Read as-is by the
+    benchmark harness (app/core/benchmark_db.py) at trial end; not otherwise
+    interpreted or scored here -- see benchmark_scoring.py for that, kept
+    deliberately separate so a scoring formula can change without touching
+    what gets recorded.
+    """
+
+    actions_by_type: Dict[str, int] = Field(default_factory=dict)
+    cognition_fallbacks: int = 0
+    min_health_reached: int = 100
+    damage_taken_total: int = 0
+    resources_gathered_total: int = 0
+    aliens_killed: int = 0
+    sectors_explored: int = 0
+    orders_issued: int = 0
+    orders_complied: int = 0
+    orders_ignored: int = 0
+
+
 class AgentState(BaseModel):
     """Mutable per-agent runtime state tracked by the WorldEngine across ticks."""
 
@@ -47,6 +70,7 @@ class AgentState(BaseModel):
     inventory: List[str] = Field(default_factory=list)
     loyalty: int = Field(default=7, ge=0, le=10)
     pending_order: Optional[PendingOrder] = None
+    stats: AgentStats = Field(default_factory=AgentStats)
 
 
 class AgentPerception(BaseModel):

@@ -12,6 +12,9 @@ __pycache__/
 # Per-colonist Palimpsest memory (generated at runtime, survives restarts on purpose)
 backend/app/data/memory/
 
+# Benchmark harness's long-running local results DB (backend/run_benchmark.py)
+backend/logs/
+
 # Godot specific overrides and metadata
 .godot/
 *.uid

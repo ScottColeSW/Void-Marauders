@@ -76,31 +76,33 @@ Open **http://127.0.0.1:8000/** — that's the live dashboard. It polls the back
 
 **2. Pull the models you need**
 
-Each colonist runs on a *different* local model and temperature — partly for variety of
-"voice", partly a deliberate personality match (see `backend/app/core/world_seed.py`):
+By default, colonists share **two** small models rather than five distinct ones — deliberately.
+Five different models resident at once is 10+ GB, more than an 8 GB-class consumer GPU (e.g. an
+RTX 2080 Super) can hold; Ollama then evicts and reloads a model from disk on nearly every
+agent's turn, every tick, which is far slower than the "personality variety" was worth. Two
+small models (~3.5 GB combined) stay resident together comfortably, and personality still comes
+through via temperature and the system prompt (see `backend/app/core/world_seed.py`):
 
 | Colonist | Model | Temp | Why |
 |---|---|---|---|
-| Karl (paranoid engineer) | `qwen2.5:7b` | 0.5 | sharpest reasoning, low variance — suits a deliberate, suspicious engineer |
-| Valerie (impulsive pilot) | `llama3.2:latest` | 0.9 | fast, high variance — suits reckless decisions |
-| Amara (calm medic) | `phi4-mini:latest` | 0.3 | steady, low variance — suits a dutiful, consistent caretaker |
-| Otieno (security officer) | `qwen2.5:3b` | 0.6 | good enough tactical reasoning, fast — he's in combat most often |
-| Priya (curious botanist) | `gemma2:2b` | 0.8 | fastest, most whimsical/creative flavor text |
+| Karl (paranoid engineer) | `qwen2.5:3b` | 0.5 | the sharper of the two — suits a deliberate, suspicious engineer |
+| Valerie (impulsive pilot, captain) | `qwen2.5:3b` | 0.9 | sharper model, high temperature — reckless but still issues sane orders |
+| Amara (calm medic) | `gemma2:2b` | 0.3 | lighter model, low temperature — steady, mostly support actions |
+| Otieno (security officer) | `qwen2.5:3b` | 0.6 | sharper model — he's in combat most often, reasoning quality matters |
+| Priya (curious botanist) | `gemma2:2b` | 0.8 | lighter model, high temperature — flavor over precision |
 
-Pull all of them, plus the embedding model:
+Pull both, plus the embedding model:
 ```bash
-ollama pull qwen2.5:7b
 ollama pull qwen2.5:3b
-ollama pull llama3.2
-ollama pull phi4-mini
 ollama pull gemma2:2b
 ollama pull nomic-embed-text   # required if MEMORY_ENABLED=true
 ```
-Don't have all five? Any agent's `model` in `world_seed.py` can be pointed at whatever you've
-already got — nothing else needs to change. `qwen2.5:3b` alone is a fine single fallback: on
-everyday decisions (gather/build/explore) it's nearly as sharp as `qwen2.5:7b` at roughly half
-the latency, and only occasionally fumbles a combat target under pressure — which fails safe,
-since the engine just no-ops rather than crashing.
+
+**Got more VRAM to spare (12+ GB)?** Feel free to spread colonists back out across more distinct
+models in `world_seed.py` for more voice variety — nothing else needs to change. Check what fits
+first: `nvidia-smi --query-gpu=memory.total,memory.free --format=csv` (or Task Manager's
+Performance tab on Windows) shows your GPU's VRAM, and `ollama list` shows each model's size — add
+up the models you want resident at once and leave a couple GB of headroom for context/KV cache.
 
 **3. Configure and run the backend**
 
@@ -137,6 +139,38 @@ Each tick:
 4. **Resolve:** the engine applies the action to world state and logs it to the event feed. If memory is on, the outcome is checked against that colonist's mesh — reinforcing a standing belief, opening a new contradiction, or just adding to their personal log.
 
 The colony has a real end state: it's lost if every colonist reaches 0 HP, and won once every alien threat is cleared and the colony has completed at least three structures. Either way the dashboard shows a clear banner and the tick loop stops.
+
+---
+
+## 📊 Benchmarking models headlessly
+
+`backend/run_benchmark.py` drives the same `WorldEngine` the live server uses, with no
+FastAPI/dashboard involved, for reproducible model-vs-model comparison — mirrors the harness
+shape from this project's sibling, [Evo-LLM-Evolution2Civ](https://github.com/ScottColeSW/Evo):
+
+```bash
+cd backend
+python run_benchmark.py --scenario baseline --trials 3
+python run_benchmark.py --scenario swarm_pressure --models qwen2.5:3b,gemma2:2b
+python run_benchmark.py --report
+python run_benchmark.py --report --scenario swarm_pressure
+```
+
+Every colonist's raw counters (idle ticks, cognition fallbacks, resources gathered, aliens
+killed, sectors explored, orders issued/complied/ignored, min health reached, ...) are tracked
+live on `AgentState.stats` during normal play, not just benchmark runs, and get written as
+**raw facts — never a computed score** — into a long-running `backend/logs/benchmark_results.db`
+(same reasoning as Evo's own harness: a stored score silently goes stale the moment the scoring
+formula changes). `--report` computes a 0-100 score per trial at read time instead
+(`app/core/benchmark_scoring.py`, versioned via `SCORING_VERSION`).
+
+`--models` is optional — omit it to benchmark the real default two-model roster as shipped, or
+pass one/several (cycled across the five colonists) for a controlled single-model comparison.
+Scenarios live in `app/core/benchmark_scenarios.py` (`baseline`, `swarm_pressure`,
+`resource_scarcity` today); the harness forces `COGNITION_MODE=llm` and `MEMORY_ENABLED=false`
+regardless of `.env` — real models are the whole point, and every trial reuses the same five
+fixed colonist IDs, so persistent memory would leak state between trials and break
+reproducibility.
 
 ---
 

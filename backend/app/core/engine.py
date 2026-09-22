@@ -27,13 +27,30 @@ WIN_STRUCTURES_REQUIRED = 3
 class WorldEngine:
     """Owns the single in-memory colony simulation and advances it tick by tick."""
 
-    def __init__(self):
+    def __init__(self, memory_namespace: Optional[str] = None):
+        # world_seed.py always creates the same five fixed agent_ids, and
+        # memory.py keys each colonist's Palimpsest store (and its on-disk
+        # file) by whatever id it's given. A live dashboard run wants that --
+        # stable ids are how a restart finds its way back to the same
+        # memories. A benchmark trial (run_benchmark.py) wants the opposite:
+        # every trial is a fresh colonist, and trials need to be independent
+        # samples for --report's mean/min/max to mean anything. memory_namespace
+        # prefixes every id handed to the memory module (see _memory_id) so a
+        # trial's memories live in their own file and can never collide with
+        # live play or with another trial, without memory.py needing to know
+        # anything about trials at all.
         self.world, self.agents = create_initial_world()
+        self._memory_namespace = memory_namespace
         # The background auto-tick loop (event loop thread) and the manual
         # POST /tick endpoint (FastAPI threadpool thread) can both call tick()
         # concurrently — serialize them so they never mutate world state at once.
         self._lock = threading.Lock()
         self._low_loyalty_flagged: set = set()
+
+    def _memory_id(self, agent_id: str) -> str:
+        if not self._memory_namespace:
+            return agent_id
+        return f"{self._memory_namespace}__{agent_id}"
 
     def tick(self) -> WorldState:
         with self._lock:
@@ -87,8 +104,13 @@ class WorldEngine:
             ]
             if occupants:
                 target = random.choice(occupants)
+                health_before = target.health
                 target.health = max(0, target.health - ALIEN_ATTACK_DAMAGE)
                 target.stress_level = min(10, target.stress_level + 1)
+                target.stats.damage_taken_total += health_before - target.health
+                target.stats.min_health_reached = min(
+                    target.stats.min_health_reached, target.health
+                )
                 self._log(
                     f"A creature at {alien.sector_id} attacks {target.profile.name} "
                     f"for {ALIEN_ATTACK_DAMAGE} damage."
@@ -115,17 +137,26 @@ class WorldEngine:
             if agent.pending_order and self._resolve_pending_order(agent):
                 continue  # complied — this tick's turn is already spent
             perception = self._build_perception(agent)
-            action = cognition.decide(agent, perception, self.world)
+            action, fallback = cognition.decide(agent, perception, self.world)
+            self._record_action_stats(agent, action, fallback)
             if action.spoken_dialogue:
                 self._log(f'{agent.profile.name}: "{action.spoken_dialogue}"')
             self._resolve_action(agent, action)
             memory.record_action(
-                agent.profile.agent_id,
+                self._memory_id(agent.profile.agent_id),
                 action,
                 current_sector=agent.current_sector,
                 nearby_aliens=perception.nearby_aliens,
                 crew_names=self._crew_names(),
             )
+
+    def _record_action_stats(
+        self, agent: AgentState, action: AgentActionSchema, fallback: bool = False
+    ) -> None:
+        key = action.action_type.value
+        agent.stats.actions_by_type[key] = agent.stats.actions_by_type.get(key, 0) + 1
+        if fallback:
+            agent.stats.cognition_fallbacks += 1
 
     # -- chain of command ----------------------------------------------------
 
@@ -144,23 +175,26 @@ class WorldEngine:
                 f"{order.action_type.value}."
             )
             action = self._mechanical_order_action(agent, order.action_type)
+            self._record_action_stats(agent, action)
+            agent.stats.orders_complied += 1
             self._resolve_action(agent, action)
             memory.record_action(
-                agent.profile.agent_id,
+                self._memory_id(agent.profile.agent_id),
                 action,
                 current_sector=agent.current_sector,
                 nearby_aliens=self._aliens_in_sector(agent.current_sector),
                 crew_names=self._crew_names(),
             )
             memory.record_order_outcome(
-                agent.profile.agent_id, order.captain_id, captain_name, complied=True
+                self._memory_id(agent.profile.agent_id), order.captain_id, captain_name, complied=True
             )
             return True
 
         agent.loyalty = max(0, agent.loyalty - 1)
+        agent.stats.orders_ignored += 1
         self._log(f"{agent.profile.name} ignores {captain_name}'s order.")
         memory.record_order_outcome(
-            agent.profile.agent_id, order.captain_id, captain_name, complied=False
+            self._memory_id(agent.profile.agent_id), order.captain_id, captain_name, complied=False
         )
         if agent.loyalty <= 2 and agent.profile.agent_id not in self._low_loyalty_flagged:
             self._low_loyalty_flagged.add(agent.profile.agent_id)
@@ -220,7 +254,7 @@ class WorldEngine:
             colony_status=self.world.colony_resources,
             stress_level=agent.stress_level,
             retrieved_memories=memory.recall(
-                agent.profile.agent_id,
+                self._memory_id(agent.profile.agent_id),
                 current_sector=agent.current_sector,
                 nearby_crew=nearby_crew,
                 nearby_aliens=nearby_aliens,
@@ -241,6 +275,7 @@ class WorldEngine:
                 for resource, amount in sector.resource_yield.items():
                     current = getattr(self.world.colony_resources, resource.value)
                     setattr(self.world.colony_resources, resource.value, current + amount)
+                    agent.stats.resources_gathered_total += amount
                 self._log(f"{agent.profile.name} gathers resources from {sector.sector_id}.")
 
         elif action.action_type == ActionType.EXPLORE_SECTOR:
@@ -295,6 +330,7 @@ class WorldEngine:
         target.pending_order = PendingOrder(
             captain_id=agent.profile.agent_id, action_type=action.order_action
         )
+        agent.stats.orders_issued += 1
         self._log(
             f"{agent.profile.name} orders {target.profile.name} to "
             f"{action.order_action.value}."
@@ -305,6 +341,7 @@ class WorldEngine:
         target_sector = self.world.sectors.get(target_id)
         if target_sector and not target_sector.explored:
             target_sector.explored = True
+            agent.stats.sectors_explored += 1
             self._log(f"{agent.profile.name} explores {target_sector.sector_id}.")
             if (
                 target_sector.sector_type == SectorType.ALIEN_NEST
@@ -358,6 +395,7 @@ class WorldEngine:
         alien.health -= WEAPON_DAMAGE
         if alien.health <= 0:
             del self.world.aliens[alien.alien_id]
+            agent.stats.aliens_killed += 1
             self._log(f"{agent.profile.name} destroys {alien.alien_id}!")
         else:
             self._log(

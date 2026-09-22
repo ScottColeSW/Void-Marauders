@@ -67,17 +67,25 @@ def create_initial_world() -> Tuple[WorldState, Dict[str, AgentState]]:
     )
 
     agents = {
-        # Each colonist runs on a different local model/temperature — partly for
-        # variety of "voice", partly a deliberate personality match (methodical
-        # roles get a sharper model and lower temperature; impulsive/creative
-        # roles get more randomness). See README for the per-model tradeoffs.
+        # Two distinct models, not five -- deliberately. Five different models
+        # resident at once is 10+ GB, more than an 8 GB-class consumer GPU
+        # (e.g. an RTX 2080 Super) can hold; Ollama then evicts and reloads a
+        # model from disk on nearly every agent's turn, every tick, which is
+        # far slower than one extra model would ever save. Two small models
+        # (~3.5 GB combined) stay resident together comfortably. Personality
+        # variety still comes through via temperature and the system prompt
+        # (see cognition.py/prompts.py) -- the sharper qwen2.5:3b goes to
+        # roles where reasoning quality matters most (combat, command,
+        # vigilance), the lighter gemma2:2b to roles leaning more on flavor
+        # than precision. If your GPU has more headroom, feel free to spread
+        # these back out to more distinct models per agent.
         "engineer_karl": AgentState(
             profile=AgentProfile(
                 agent_id="engineer_karl",
                 name="Karl",
                 role="Cybernetic Engineer",
                 personality_trait="Cynical and paranoid, secretly distrusts Valerie",
-                model="qwen2.5:7b",
+                model="qwen2.5:3b",
                 temperature=0.5,
             ),
             current_sector="colony_core",
@@ -88,7 +96,7 @@ def create_initial_world() -> Tuple[WorldState, Dict[str, AgentState]]:
                 name="Valerie",
                 role="Pilot",
                 personality_trait="Confident and impulsive, quick to take risks",
-                model="llama3.2:latest",
+                model="qwen2.5:3b",
                 temperature=0.9,
                 is_captain=True,
             ),
@@ -100,7 +108,7 @@ def create_initial_world() -> Tuple[WorldState, Dict[str, AgentState]]:
                 name="Amara",
                 role="Medic",
                 personality_trait="Calm and dutiful, prioritizes crew welfare above all",
-                model="phi4-mini:latest",
+                model="gemma2:2b",
                 temperature=0.3,
             ),
             current_sector="colony_core",

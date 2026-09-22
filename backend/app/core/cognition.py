@@ -1,6 +1,7 @@
 import json
 import os
 import random
+from typing import Tuple
 
 from app.core.prompts import build_prompt
 from app.schemas.agent import ActionType, AgentActionSchema, AgentPerception, AgentState
@@ -10,20 +11,31 @@ COGNITION_MODE = os.getenv("COGNITION_MODE", "mock").lower()
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 
 
-def decide(agent: AgentState, perception: AgentPerception, world: WorldState) -> AgentActionSchema:
+def decide(
+    agent: AgentState, perception: AgentPerception, world: WorldState
+) -> Tuple[AgentActionSchema, bool]:
+    """Returns (action, was_fallback). was_fallback is only ever True when
+    COGNITION_MODE="llm" and the real call failed -- mock mode is an
+    intentional choice, not a failure, so it never counts as one. Callers
+    (WorldEngine, the benchmark harness) use this to track how often a
+    model actually worked versus silently no-opped, the same signal
+    Dominion's fallback_total metric tracks for its own scripted fallback."""
     if COGNITION_MODE == "llm":
         try:
-            return _llm_decide(agent, perception)
+            return _llm_decide(agent, perception), False
         except Exception as exc:
             # A single flaky/hallucinated LLM response should never take down
             # the whole tick loop — fall back to a safe no-op for this agent.
-            return AgentActionSchema(
-                inner_monologue=f"{agent.profile.name} hesitates, unable to decide ({exc}).",
-                spoken_dialogue=None,
-                action_type=ActionType.IDLE,
-                target_id=None,
+            return (
+                AgentActionSchema(
+                    inner_monologue=f"{agent.profile.name} hesitates, unable to decide ({exc}).",
+                    spoken_dialogue=None,
+                    action_type=ActionType.IDLE,
+                    target_id=None,
+                ),
+                True,
             )
-    return _mock_decide(agent, perception, world)
+    return _mock_decide(agent, perception, world), False
 
 
 def _mock_decide(
