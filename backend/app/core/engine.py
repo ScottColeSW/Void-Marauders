@@ -36,6 +36,20 @@ STARVATION_DAMAGE = 5
 ENERGY_UPKEEP_PER_STRUCTURE = 1
 STRUCTURE_DECAY_HP = 5
 
+# Loyalty used to move the same +1/-1 on every order regardless of what the
+# order actually was or how it turned out -- a captain who orders someone
+# into a fight that gets them hurt earned the exact same trust as one who
+# didn't. Real incentive: complying with a RISKY order (target is currently
+# facing aliens) that then hurts them costs real trust -- more than routine
+# defiance would have -- while a risky order that pays off earns more than a
+# safe one. Refusing a visibly dangerous order costs nothing: self-
+# preservation against a reckless captain is a rational choice, not
+# insubordination. Ordinary (non-risky) orders are unaffected -- same +1/-1
+# as before.
+RISKY_ORDER_BACKFIRE_LOYALTY_PENALTY = 3
+RISKY_ORDER_PAYOFF_LOYALTY_BONUS = 2
+CAUTIOUS_DEFIANCE_LOYALTY_PENALTY = 0
+
 
 class WorldEngine:
     """Owns the single in-memory colony simulation and advances it tick by tick."""
@@ -69,8 +83,13 @@ class WorldEngine:
         with self._lock:
             if self.world.status != ColonyStatus.ACTIVE:
                 return self.world
+            # Snapshotted before environment_step so order resolution can tell
+            # whether a colonist actually took damage this tick (from aliens,
+            # starvation, whatever) -- see _resolve_pending_order's outcome-
+            # sensitive loyalty logic.
+            health_at_tick_start = {aid: a.health for aid, a in self.agents.items()}
             self._environment_step()
-            self._agent_step()
+            self._agent_step(health_at_tick_start)
             self.world.tick += 1
             self._check_end_conditions()
             self._trim_log()
@@ -185,11 +204,11 @@ class WorldEngine:
 
     # -- agents (cognition) --------------------------------------------------
 
-    def _agent_step(self) -> None:
+    def _agent_step(self, health_at_tick_start: dict) -> None:
         for agent in self.agents.values():
             if agent.health <= 0:
                 continue
-            if agent.pending_order and self._resolve_pending_order(agent):
+            if agent.pending_order and self._resolve_pending_order(agent, health_at_tick_start):
                 continue  # complied — this tick's turn is already spent
             perception = self._build_perception(agent)
             action, fallback = cognition.decide(agent, perception, self.world)
@@ -215,24 +234,43 @@ class WorldEngine:
 
     # -- chain of command ----------------------------------------------------
 
-    def _resolve_pending_order(self, agent: AgentState) -> bool:
+    def _resolve_pending_order(self, agent: AgentState, health_at_tick_start: dict) -> bool:
         """Roll compliance for a pending captain order. Returns True if it
         consumed this agent's turn (complied), False if they act on their own."""
         order = agent.pending_order
         agent.pending_order = None
         captain = self.agents.get(order.captain_id)
         captain_name = captain.profile.name if captain else "the captain"
+        risky = bool(self._aliens_in_sector(agent.current_sector))
 
         if random.random() < (agent.loyalty / 10):
-            agent.loyalty = min(10, agent.loyalty + 1)
-            self._log(
-                f"{agent.profile.name} follows {captain_name}'s order: "
-                f"{order.action_type.value}."
-            )
             action = self._mechanical_order_action(agent, order.action_type)
             self._record_action_stats(agent, action)
             agent.stats.orders_complied += 1
             self._resolve_action(agent, action)
+
+            harmed = agent.health < health_at_tick_start.get(agent.profile.agent_id, agent.health)
+            if risky and harmed:
+                agent.loyalty = max(0, agent.loyalty - RISKY_ORDER_BACKFIRE_LOYALTY_PENALTY)
+                agent.stats.risky_orders_backfired += 1
+                self._log(
+                    f"{agent.profile.name} followed {captain_name}'s order into danger and got "
+                    "hurt for it — trust in command cracks."
+                )
+            elif risky:
+                agent.loyalty = min(10, agent.loyalty + RISKY_ORDER_PAYOFF_LOYALTY_BONUS)
+                agent.stats.risky_orders_complied += 1
+                self._log(
+                    f"{agent.profile.name} followed {captain_name}'s risky order and came out "
+                    "fine — that took real trust."
+                )
+            else:
+                agent.loyalty = min(10, agent.loyalty + 1)
+                self._log(
+                    f"{agent.profile.name} follows {captain_name}'s order: "
+                    f"{order.action_type.value}."
+                )
+
             memory.record_action(
                 self._memory_id(agent.profile.agent_id),
                 action,
@@ -245,9 +283,16 @@ class WorldEngine:
             )
             return True
 
-        agent.loyalty = max(0, agent.loyalty - 1)
         agent.stats.orders_ignored += 1
-        self._log(f"{agent.profile.name} ignores {captain_name}'s order.")
+        if risky:
+            agent.loyalty = max(0, agent.loyalty - CAUTIOUS_DEFIANCE_LOYALTY_PENALTY)
+            self._log(
+                f"{agent.profile.name} refuses {captain_name}'s order rather than stay in "
+                "harm's way — self-preservation over blind loyalty."
+            )
+        else:
+            agent.loyalty = max(0, agent.loyalty - 1)
+            self._log(f"{agent.profile.name} ignores {captain_name}'s order.")
         memory.record_order_outcome(
             self._memory_id(agent.profile.agent_id), order.captain_id, captain_name, complied=False
         )

@@ -56,14 +56,21 @@ Output only the JSON object, strictly adhering to that schema.
 CAPTAIN_CHAIN_OF_COMMAND = """
 You are the Captain — you may use action_type "issue_order" with target_id set to a nearby crew
 member's id and order_action set to what you want them to do. Whether they obey depends on their
-loyalty to you; don't expect blind obedience.
+loyalty to you; don't expect blind obedience. Sending someone into a fight is a real gamble on
+your authority, not a free action: if they obey and it goes badly for them, your crew's trust in
+your judgement takes a real hit — worse than if they'd simply ignored you. If they obey a risky
+order and it pays off, trust grows more than it would from a routine one. Reckless orders that
+keep backfiring will cost you your command; think about whether an order is actually worth asking
+someone to risk their life for before you give it.
 """.strip()
 
 CREW_CHAIN_OF_COMMAND_TEMPLATE = """
 Valerie is the Captain. You are not — you cannot issue_order. Your loyalty to her is {loyalty}/10.
 If she has just given you an order, weigh it against your own judgement and your loyalty to her —
 higher loyalty means you're more inclined to comply, lower loyalty means you're more likely to act
-on your own judgement instead.
+on your own judgement instead. If complying would put you somewhere aliens are already present,
+that's a real gamble, not routine duty — refusing a clearly dangerous order costs you little to
+nothing, so weigh whether this particular order is one worth risking your life to follow.
 """.strip()
 
 # Real trials exposed why colonists never fought back: "Nearby Alien Threats: alien_a1b2c3" is

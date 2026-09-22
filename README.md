@@ -142,6 +142,8 @@ Each tick:
 
 **Food and energy are real costs, not decoration.** Food drains every tick regardless of colonist count; if it can't be covered, the whole living crew takes starvation damage until someone gathers again. Energy costs 1/tick per *completed* structure to stay powered; left unpaid, structures decay and can be destroyed outright, undoing both the build progress and the win condition's structure count. Metal (spent building) and biomatter are the only resources without an ongoing drain.
 
+**Loyalty is an incentive, not a scoreboard.** The captain (Valerie) can `issue_order` to nearby crew; whether they comply depends on loyalty, and compliance used to move the same flat +1/-1 regardless of what the order actually cost anyone. Now it's outcome-sensitive: complying with an order that sends a colonist somewhere aliens already are, and then getting hurt, costs real trust — more than simple defiance would have. The same risky order paying off (they comply and come out fine) earns more trust than a routine one. Refusing an order that's visibly dangerous costs little to nothing — rational self-preservation, not insubordination. A captain who keeps giving orders that get people hurt erodes their own authority over time, in a way you can watch happen and that `AgentStats.risky_orders_complied`/`risky_orders_backfired` make directly measurable via the benchmark harness.
+
 The colony has a real end state: it's lost if every colonist reaches 0 HP (starvation included), and won once every alien threat is cleared and the colony has completed at least three structures. Either way the dashboard shows a clear banner and the tick loop stops.
 
 ---

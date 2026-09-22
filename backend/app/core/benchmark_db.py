@@ -33,6 +33,7 @@ _TRIAL_AGENT_INT_COLUMNS = (
     "survived", "final_health", "min_health_reached", "damage_taken_total",
     "resources_gathered_total", "aliens_killed", "sectors_explored",
     "cognition_fallbacks", "orders_issued", "orders_complied", "orders_ignored",
+    "risky_orders_complied", "risky_orders_backfired",
     "idle_count", "final_loyalty", "is_captain",
 )
 _TRIAL_AGENT_TEXT_COLUMNS = ("agent_id", "model", "actions_by_type_json")
@@ -136,6 +137,8 @@ def extract_agent_facts(agent) -> dict:
         "orders_issued": stats.orders_issued,
         "orders_complied": stats.orders_complied,
         "orders_ignored": stats.orders_ignored,
+        "risky_orders_complied": stats.risky_orders_complied,
+        "risky_orders_backfired": stats.risky_orders_backfired,
         "idle_count": stats.actions_by_type.get("idle", 0),
         "actions_by_type_json": json.dumps(stats.actions_by_type),
     }

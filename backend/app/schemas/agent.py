@@ -58,6 +58,12 @@ class AgentStats(BaseModel):
     orders_issued: int = 0
     orders_complied: int = 0
     orders_ignored: int = 0
+    # Of the orders complied with, how many were risky (target already facing
+    # aliens) and how did they turn out -- the actual signal for "does this
+    # captain's judgment cost their crew," not just raw compliance. See
+    # engine.py's _resolve_pending_order.
+    risky_orders_complied: int = 0
+    risky_orders_backfired: int = 0
 
 
 class AgentState(BaseModel):
