@@ -31,6 +31,13 @@ Persistence: each store is dumped to JSON under MEMORY_DIR. This is
 deliberately independent of world state — the colony can reset
 (new run) while colonists still remember; see engine.py's tick() for
 the save cadence.
+
+Palimpsest is imported lazily (inside the functions that need it, not
+at module load) rather than at the top of this file. This module is
+always imported by engine.py regardless of MEMORY_ENABLED, and the
+README's "fastest path" quickstart promises zero Ollama/Docker/extra
+setup in mock mode — a hard top-level `import palimpsest` would break
+that promise for anyone who hasn't also cloned and pip-installed it.
 """
 
 from __future__ import annotations
@@ -42,14 +49,13 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
-
-from palimpsest.consult import DOMAIN_KINDS, apply_consult, consult
-from palimpsest.decay import decay_store
-from palimpsest.memory_store import InMemoryStore
-from palimpsest.models import DomainKind, Edge, EdgeStatus, EdgeType, Node, Origin, Scope
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 from app.schemas.agent import ActionType, AgentActionSchema
+
+if TYPE_CHECKING:
+    from palimpsest.memory_store import InMemoryStore
+    from palimpsest.models import Edge, Node
 
 MEMORY_ENABLED = os.getenv("MEMORY_ENABLED", "true").lower() == "true"
 MEMORY_DIR = Path(os.getenv("MEMORY_DIR", str(Path(__file__).resolve().parents[1] / "data" / "memory")))
@@ -66,21 +72,33 @@ DOMAIN_CREW_TRUST = "crew_trust"
 DOMAIN_THREAT_ASSESSMENT = "threat_assessment"
 DOMAIN_PERSONAL_LOG = "personal_log"
 
-# DOMAIN_KINDS defaults unregistered domains to EVENT (see palimpsest.consult) --
-# an unsafe default here means "unregistered" silently gets no collision
-# detection. Both of ours are ATTRIBUTE: a colonist's read on another colonist,
-# or on a sector's safety, has exactly one standing value at a time, so a
-# contradicting observation is real tension, not just "a different event."
-# Registering here (rather than in Palimpsest itself) keeps the library's own
-# domain catalog free of one consumer's vocabulary -- this is the extension
-# point its own docs describe: a plain dict, meant to be added to.
-DOMAIN_KINDS[DOMAIN_CREW_TRUST] = DomainKind.ATTRIBUTE
-DOMAIN_KINDS[DOMAIN_THREAT_ASSESSMENT] = DomainKind.ATTRIBUTE
-
 _ALIEN_REACTION_ACTIONS = (ActionType.FIRE_WEAPON, ActionType.TAKE_COVER, ActionType.RETREAT)
 
-_stores: Dict[str, InMemoryStore] = {}
+_stores: Dict[str, "InMemoryStore"] = {}
 _embed_unavailable_until: float = 0.0
+_domains_registered = False
+
+
+def _register_domain_kinds() -> None:
+    # DOMAIN_KINDS defaults unregistered domains to EVENT (see palimpsest.consult)
+    # -- an unsafe default here means "unregistered" silently gets no collision
+    # detection. Both of ours are ATTRIBUTE: a colonist's read on another
+    # colonist, or on a sector's safety, has exactly one standing value at a
+    # time, so a contradicting observation is real tension, not just "a
+    # different event." Registering here (rather than in Palimpsest itself)
+    # keeps the library's own domain catalog free of one consumer's
+    # vocabulary -- this is the extension point its own docs describe: a
+    # plain dict, meant to be added to. Idempotent since it runs on every
+    # call into consult()-using code, not just once at import time.
+    global _domains_registered
+    if _domains_registered:
+        return
+    from palimpsest.consult import DOMAIN_KINDS
+    from palimpsest.models import DomainKind
+
+    DOMAIN_KINDS[DOMAIN_CREW_TRUST] = DomainKind.ATTRIBUTE
+    DOMAIN_KINDS[DOMAIN_THREAT_ASSESSMENT] = DomainKind.ATTRIBUTE
+    _domains_registered = True
 
 
 # -- persistence --------------------------------------------------------
@@ -94,7 +112,9 @@ def _node_to_dict(node: Node) -> dict:
     }
 
 
-def _node_from_dict(d: dict) -> Node:
+def _node_from_dict(d: dict) -> "Node":
+    from palimpsest.models import Node, Origin, Scope
+
     return Node(
         id=d["id"], text=d["text"], domain=d["domain"], referent=d["referent"],
         scope=Scope(d["scope"]), origin=Origin(d["origin"]), why=d.get("why", ""),
@@ -114,7 +134,9 @@ def _edge_to_dict(edge: Edge) -> dict:
     }
 
 
-def _edge_from_dict(d: dict) -> Edge:
+def _edge_from_dict(d: dict) -> "Edge":
+    from palimpsest.models import Edge, EdgeStatus, EdgeType
+
     return Edge(
         id=d["id"], source_id=d["source_id"], target_id=d["target_id"],
         type=EdgeType(d["type"]), date=datetime.fromisoformat(d["date"]),
@@ -128,7 +150,9 @@ def _path_for(agent_id: str) -> Path:
     return MEMORY_DIR / f"{agent_id}.json"
 
 
-def _load_store(agent_id: str) -> InMemoryStore:
+def _load_store(agent_id: str) -> "InMemoryStore":
+    from palimpsest.memory_store import InMemoryStore
+
     store = InMemoryStore()
     path = _path_for(agent_id)
     if path.exists():
@@ -169,6 +193,10 @@ def save_all() -> None:
 # -- decay ---------------------------------------------------------------
 
 def decay_all() -> None:
+    if not _stores:
+        return  # avoid the palimpsest import entirely when nothing's been recorded yet
+    from palimpsest.decay import decay_store
+
     for store in _stores.values():
         decay_store(store, half_life_seconds=DECAY_HALF_LIFE_SECONDS, floor=DECAY_FLOOR)
 
@@ -225,6 +253,10 @@ def record_action(
 ) -> None:
     if not MEMORY_ENABLED:
         return
+    from palimpsest.consult import apply_consult, consult
+    from palimpsest.models import Node, Origin, Scope
+
+    _register_domain_kinds()
     store = _store_for(agent_id)
 
     log_text = (
@@ -260,6 +292,10 @@ def record_action(
 def record_order_outcome(agent_id: str, captain_id: str, captain_name: str, complied: bool) -> None:
     if not MEMORY_ENABLED:
         return
+    from palimpsest.consult import apply_consult, consult
+    from palimpsest.models import Node, Origin, Scope
+
+    _register_domain_kinds()
     store = _store_for(agent_id)
     verb = "complied with" if complied else "ignored"
     node = Node(
@@ -272,7 +308,9 @@ def record_order_outcome(agent_id: str, captain_id: str, captain_name: str, comp
 
 # -- recall ------------------------------------------------------------
 
-def _open_collision_partner(store: InMemoryStore, node: Node) -> Optional[Node]:
+def _open_collision_partner(store: "InMemoryStore", node: "Node") -> "Optional[Node]":
+    from palimpsest.models import EdgeStatus, EdgeType
+
     for edge in store.get_edges_for_node(node.id, edge_types=[EdgeType.COLLIDES]):
         if edge.status != EdgeStatus.OPEN:
             continue
@@ -289,6 +327,8 @@ def recall(
 ) -> List[str]:
     if not MEMORY_ENABLED:
         return []
+    from palimpsest.models import Origin
+
     store = _store_for(agent_id)
     lines: List[str] = []
 
