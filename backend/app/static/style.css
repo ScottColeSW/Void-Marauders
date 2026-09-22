@@ -45,6 +45,27 @@ h1 {
   font-size: 0.9rem;
 }
 
+.header-right {
+  display: flex;
+  align-items: baseline;
+  gap: 1.25rem;
+}
+
+.nav-link {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  letter-spacing: 0.05em;
+  text-decoration: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.3rem 0.6rem;
+}
+
+.nav-link:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .tick {
   color: var(--amber);
   font-size: 1rem;

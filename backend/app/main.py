@@ -8,11 +8,17 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.core import memory
+from app.core import benchmark_db, memory
 from app.core.engine import get_engine
+
+# generate_report.py lives at the backend/ root (sibling of app/), not inside
+# the app package -- importable here because uvicorn is always run from
+# backend/ (see README), which Python puts on sys.path same as it does for
+# `app` itself.
+import generate_report
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
@@ -80,3 +86,19 @@ def get_events(limit: int = 20):
 @app.post("/tick")
 def advance_tick():
     return get_engine().tick()
+
+
+@app.get("/benchmark/report", response_class=HTMLResponse)
+def get_benchmark_report(scenario: Optional[str] = None, model: Optional[str] = None):
+    # Queries backend/logs/benchmark_results.db fresh on every request --
+    # re-run backend/run_benchmark.py and reload this page to see new
+    # trials, no server restart needed.
+    data = benchmark_db.export_report_data(scenario_key=scenario, model=model)
+    if not data["trials"]:
+        return HTMLResponse(
+            "<body style='background:#0a0e0c;color:#c8e6d8;font-family:monospace;padding:2rem'>"
+            "<h1>No benchmark trials recorded yet</h1>"
+            "<p>Run one from backend/: <code>python run_benchmark.py --scenario swarm_pressure --trials 1</code></p>"
+            "</body>"
+        )
+    return HTMLResponse(generate_report.build_report(data))
