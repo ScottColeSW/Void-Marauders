@@ -50,13 +50,10 @@ venv\Scripts\activate        # Windows
 # source venv/bin/activate   # macOS/Linux
 
 pip install -r requirements.txt
+cp .env.example .env
 ```
 
-Edit `backend/.env` and set:
-```
-COGNITION_MODE=mock
-MEMORY_ENABLED=false
-```
+`.env.example`'s defaults (`COGNITION_MODE=mock`, `MEMORY_ENABLED=false`) are already this fastest path — no edits needed.
 
 Run it:
 ```bash
@@ -107,12 +104,10 @@ since the engine just no-ops rather than crashing.
 
 **3. Configure and run the backend**
 
-In `backend/.env`:
+In `backend/.env` (see `.env.example` for the full list), flip the two fast-path defaults:
 ```
 COGNITION_MODE=llm
 MEMORY_ENABLED=true
-EMBED_MODEL=nomic-embed-text
-TICK_INTERVAL_SECONDS=20
 ```
 
 ```bash
