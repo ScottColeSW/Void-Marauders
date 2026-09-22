@@ -50,6 +50,19 @@ RISKY_ORDER_BACKFIRE_LOYALTY_PENALTY = 3
 RISKY_ORDER_PAYOFF_LOYALTY_BONUS = 2
 CAUTIOUS_DEFIANCE_LOYALTY_PENALTY = 0
 
+# Gathering used to be a guaranteed, fixed payoff -- resource_field_north
+# always yields exactly 8 metal, every single time, forever. No uncertainty
+# means no real economic decision: gathering is just a chore with a known
+# reward, not a bet on anything. Sector.resource_yield is now read as the
+# EXPECTED (average) yield; the actual amount per gather swings +/-50% of it,
+# floored at 1 so a gather is never a total waste. Reasonable, not wild: the
+# bound keeps a bad roll from ever undoing the point of gathering at all,
+# while a real spread (half of expected, up to one and a half times it) is
+# enough that "how much did that actually get us" becomes a real question
+# instead of a known constant.
+RESOURCE_YIELD_VARIANCE_LOW = 0.5
+RESOURCE_YIELD_VARIANCE_HIGH = 1.5
+
 
 class WorldEngine:
     """Owns the single in-memory colony simulation and advances it tick by tick."""
@@ -372,11 +385,18 @@ class WorldEngine:
 
         if action.action_type == ActionType.GATHER_RESOURCE and sector:
             if sector.resource_yield:
-                for resource, amount in sector.resource_yield.items():
+                gathered = []
+                for resource, expected in sector.resource_yield.items():
+                    amount = max(1, round(expected * random.uniform(
+                        RESOURCE_YIELD_VARIANCE_LOW, RESOURCE_YIELD_VARIANCE_HIGH
+                    )))
                     current = getattr(self.world.colony_resources, resource.value)
                     setattr(self.world.colony_resources, resource.value, current + amount)
                     agent.stats.resources_gathered_total += amount
-                self._log(f"{agent.profile.name} gathers resources from {sector.sector_id}.")
+                    gathered.append(f"{resource.value}+{amount}")
+                self._log(
+                    f"{agent.profile.name} gathers {', '.join(gathered)} from {sector.sector_id}."
+                )
 
         elif action.action_type == ActionType.EXPLORE_SECTOR:
             self._resolve_explore(agent, action)
