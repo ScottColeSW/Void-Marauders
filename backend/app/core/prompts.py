@@ -23,6 +23,9 @@ CURRENT ENVIRONMENT DATA:
 - Nearby Crew: {nearby_crew}
 - Nearby Alien Threats: {nearby_aliens}
 - Colony Stockpile: metal={metal}, food={food}, energy={energy}, biomatter={biomatter}
+  (food and energy are consumed every tick just to keep the colony running — if food runs out
+  the whole crew starts starving, and if energy runs out your built structures start falling
+  into disrepair and can be lost entirely. Metal and biomatter don't drain on their own.)
 
 HISTORICAL MEMORIES EXTRACTED FROM YOUR BRAIN:
 {retrieved_memories}

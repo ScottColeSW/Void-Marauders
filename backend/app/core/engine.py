@@ -23,6 +23,19 @@ PASSIVE_BUILD_PROGRESS = 5
 EXPLORE_ALIEN_ENCOUNTER_CHANCE = 0.25
 WIN_STRUCTURES_REQUIRED = 3
 
+# Real sinks for food/energy -- previously gathered but never spent, so both
+# just climbed forever with zero mechanical consequence. Flat per-tick costs
+# (not scaled per-colonist/per-structure count beyond what's below) on
+# purpose: colony starts at food=40, energy=15, and a single dedicated
+# gatherer already nets +6 food or +5 energy per visit in real play, so a
+# steep drain would just repeat swarm_pressure's first over-tuned pass
+# (total wipeout, no signal) instead of the survivable pressure that
+# actually produced a meaningful result there.
+FOOD_UPKEEP_PER_TICK = 1
+STARVATION_DAMAGE = 5
+ENERGY_UPKEEP_PER_STRUCTURE = 1
+STRUCTURE_DECAY_HP = 5
+
 
 class WorldEngine:
     """Owns the single in-memory colony simulation and advances it tick by tick."""
@@ -127,6 +140,48 @@ class WorldEngine:
                     self._log(
                         f"{structure.structure_type} at {structure.sector_id} construction complete."
                     )
+
+        self._apply_food_upkeep()
+        self._apply_energy_upkeep()
+
+    def _apply_food_upkeep(self) -> None:
+        living = [a for a in self.agents.values() if a.health > 0]
+        if not living:
+            return
+        resources = self.world.colony_resources
+        if resources.food >= FOOD_UPKEEP_PER_TICK:
+            resources.food -= FOOD_UPKEEP_PER_TICK
+            return
+        resources.food = 0
+        self._log("[system] Food stores are empty — the colony is starving.")
+        for agent in living:
+            health_before = agent.health
+            agent.health = max(0, agent.health - STARVATION_DAMAGE)
+            agent.stress_level = min(10, agent.stress_level + 1)
+            agent.stats.damage_taken_total += health_before - agent.health
+            agent.stats.min_health_reached = min(agent.stats.min_health_reached, agent.health)
+            if agent.health == 0:
+                self._log(f"[system] {agent.profile.name} has starved.")
+
+    def _apply_energy_upkeep(self) -> None:
+        completed = [s for s in self.world.structures.values() if s.build_progress >= 100]
+        if not completed:
+            return
+        resources = self.world.colony_resources
+        upkeep = ENERGY_UPKEEP_PER_STRUCTURE * len(completed)
+        if resources.energy >= upkeep:
+            resources.energy -= upkeep
+            return
+        resources.energy = 0
+        self._log("[system] Energy reserves depleted — structures are falling into disrepair.")
+        for structure in completed:
+            structure.hp = max(0, structure.hp - STRUCTURE_DECAY_HP)
+            if structure.hp == 0:
+                self._log(
+                    f"[system] The {structure.structure_type} at {structure.sector_id} "
+                    "has fallen into ruin, unpowered too long."
+                )
+                del self.world.structures[structure.structure_id]
 
     # -- agents (cognition) --------------------------------------------------
 
