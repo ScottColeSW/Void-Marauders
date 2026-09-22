@@ -79,9 +79,11 @@ def _apply_starting_resources(engine: WorldEngine, scenario: Scenario) -> None:
 
 
 def _apply_extra_aliens(engine: WorldEngine, scenario: Scenario) -> None:
-    for _ in range(scenario.extra_aliens):
+    sectors = scenario.alien_spawn_sectors or ("alien_nest",)
+    for i in range(scenario.extra_aliens):
         alien_id = f"alien_{uuid.uuid4().hex[:6]}"
-        engine.world.aliens[alien_id] = AlienEntity(alien_id=alien_id, sector_id="alien_nest")
+        sector_id = sectors[i % len(sectors)]
+        engine.world.aliens[alien_id] = AlienEntity(alien_id=alien_id, sector_id=sector_id)
 
 
 def _apply_models(engine: WorldEngine, models: Optional[List[str]], scenario: Scenario) -> None:
