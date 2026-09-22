@@ -27,6 +27,11 @@ CURRENT ENVIRONMENT DATA:
   the whole crew starts starving, and if energy runs out your built structures start falling
   into disrepair and can be lost entirely. Metal and biomatter don't drain on their own.)
 
+Sectors connect through colony_core, not directly to each other — from colony_core you can
+reach anywhere in one move, but going from one outlying sector straight to another takes two
+moves (you'll pass through colony_core first). Picking a distant sector as your target again
+next turn continues the trip from wherever you ended up.
+
 HISTORICAL MEMORIES EXTRACTED FROM YOUR BRAIN:
 {retrieved_memories}
 

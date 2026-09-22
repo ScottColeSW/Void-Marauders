@@ -3,12 +3,14 @@ const POLL_MS = 2000;
 const RESOURCE_LABELS = { metal: "Metal", food: "Food", energy: "Energy", biomatter: "Biomatter" };
 
 // Hand-placed layout for the sim's fixed 8-sector world (see world_seed.py).
-// NOT a real coordinate/adjacency system -- the engine has none: a colonist
-// can move to any sector in a single action regardless of "distance" here
-// (see engine.py's _resolve_explore). This is purely a legibility aid, laid
-// out compass-style around colony_core. If world_seed.py's sectors change,
-// this table needs updating too -- there's no way to derive positions from
-// the backend since it doesn't model space at all.
+// Positions are still just a legibility aid (the backend has no x/y), but
+// the hub-and-spoke shape they draw IS now the real adjacency graph --
+// world_seed.SECTOR_ADJACENCY matches this exactly, and engine.py's
+// _resolve_explore enforces it: colony_core reaches everywhere in one move,
+// two outlying sectors take two (through colony_core). If world_seed.py's
+// sectors or adjacency change, this table needs updating too -- there's no
+// way to derive positions from the backend since it doesn't model space,
+// only which-sector-connects-to-which.
 const SECTOR_LAYOUT = {
   landing_ship: { x: 100, y: 220 },
   colony_core: { x: 270, y: 220 },
@@ -141,8 +143,8 @@ function renderMap(sectors, agents, aliens, structures) {
     })
     .join("");
 
-  // Faint reference lines from colony_core to every other sector -- a
-  // legibility aid only, not real adjacency (see SECTOR_LAYOUT's own note).
+  // Lines from colony_core to every other sector -- this is the real
+  // adjacency graph now (see SECTOR_LAYOUT's own note), not decoration.
   const hub = SECTOR_LAYOUT.colony_core;
   const links = Object.keys(sectors)
     .filter((id) => id !== "colony_core" && SECTOR_LAYOUT[id])

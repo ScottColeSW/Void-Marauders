@@ -1,4 +1,4 @@
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 from app.schemas.agent import AgentProfile, AgentState
 from app.schemas.world import (
@@ -9,6 +9,29 @@ from app.schemas.world import (
     SectorType,
     WorldState,
 )
+
+# Hub-and-spoke: colony_core reaches every other sector directly, but two
+# "spoke" sectors are two hops apart, through colony_core -- matches the map
+# layout drawn in app/static/app.js exactly (colony_core linked to all seven
+# others). engine.py's _resolve_explore enforces this: a colonist heading
+# for an unreachable target moves one hop toward it instead of teleporting,
+# so a distant sector genuinely takes more than one tick to reach. Colony
+# resets always reseed this same fixed 8-sector world -- if that ever
+# changes, this table and app.js's SECTOR_LAYOUT both need updating, since
+# neither can be derived from the other.
+SECTOR_ADJACENCY: Dict[str, List[str]] = {
+    "colony_core": [
+        "landing_ship", "resource_field_north", "resource_field_south",
+        "geothermal_vent", "unexplored_east", "unexplored_west", "alien_nest",
+    ],
+    "landing_ship": ["colony_core"],
+    "resource_field_north": ["colony_core"],
+    "resource_field_south": ["colony_core"],
+    "geothermal_vent": ["colony_core"],
+    "unexplored_east": ["colony_core"],
+    "unexplored_west": ["colony_core"],
+    "alien_nest": ["colony_core"],
+}
 
 
 def create_initial_world() -> Tuple[WorldState, Dict[str, AgentState]]:

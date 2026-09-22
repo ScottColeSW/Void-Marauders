@@ -4,7 +4,7 @@ import uuid
 from typing import Optional
 
 from app.core import cognition, memory
-from app.core.world_seed import create_initial_world
+from app.core.world_seed import SECTOR_ADJACENCY, create_initial_world
 from app.schemas.agent import (
     ActionType,
     AgentActionSchema,
@@ -394,7 +394,27 @@ class WorldEngine:
     def _resolve_explore(self, agent: AgentState, action: AgentActionSchema) -> None:
         target_id = action.target_id or agent.current_sector
         target_sector = self.world.sectors.get(target_id)
-        if target_sector and not target_sector.explored:
+        if not target_sector:
+            return
+
+        # Movement follows the real sector graph (world_seed.SECTOR_ADJACENCY)
+        # now, not a free teleport -- a target that isn't directly reachable
+        # moves the colonist one hop toward it (via colony_core, the hub)
+        # instead, so reaching a distant sector genuinely costs more than
+        # one tick. Picking the same distant target again next tick
+        # continues the journey from wherever this hop left off.
+        if target_id != agent.current_sector and target_id not in SECTOR_ADJACENCY.get(
+            agent.current_sector, []
+        ):
+            via = "colony_core"
+            self._log(
+                f"{agent.profile.name} can't reach {target_sector.sector_id} directly from "
+                f"{agent.current_sector} — heads to {via} first."
+            )
+            agent.current_sector = via
+            return
+
+        if not target_sector.explored:
             target_sector.explored = True
             agent.stats.sectors_explored += 1
             self._log(f"{agent.profile.name} explores {target_sector.sector_id}.")
@@ -409,8 +429,7 @@ class WorldEngine:
                 self._log(
                     f"A hostile creature ambushes {agent.profile.name} at {target_sector.sector_id}!"
                 )
-        if target_sector:
-            agent.current_sector = target_sector.sector_id
+        agent.current_sector = target_sector.sector_id
 
     def _resolve_build(self, agent: AgentState, action: AgentActionSchema) -> None:
         resources = self.world.colony_resources
