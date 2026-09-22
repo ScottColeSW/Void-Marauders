@@ -22,6 +22,7 @@ CURRENT ENVIRONMENT DATA:
 - Location: {current_sector}
 - Nearby Crew: {nearby_crew}
 - Nearby Alien Threats: {nearby_aliens}
+{threat_warning}
 - Colony Stockpile: metal={metal}, food={food}, energy={energy}, biomatter={biomatter}
   (food and energy are consumed every tick just to keep the colony running — if food runs out
   the whole crew starts starving, and if energy runs out your built structures start falling
@@ -65,14 +66,40 @@ higher loyalty means you're more inclined to comply, lower loyalty means you're 
 on your own judgement instead.
 """.strip()
 
+# Real trials exposed why colonists never fought back: "Nearby Alien Threats: alien_a1b2c3" is
+# just an opaque ID sitting next to a resource stockpile line, with nothing telling the model
+# that ignoring it is fatal. Confirmed directly -- an ambushed colonist kept choosing
+# gather_resource every tick while being hit, narrating "let's see what flora we can find,"
+# never once acknowledging the attack, until she died. This block only appears when
+# nearby_aliens is non-empty, deliberately loud and explicit about the actual stakes, and
+# names the personality-vs-survival conflict directly since that's what the real failure
+# looked like -- a strong personality trait (curious, optimistic) winning out over an
+# unlabeled threat.
+THREAT_WARNING = """
+WARNING — YOU ARE UNDER ATTACK RIGHT NOW. At least one hostile creature is sharing your sector and is
+dealing real, serious damage to you (and possibly your crewmates) every tick you don't respond —
+continuing to gather, build, explore, rest, or make small talk while this is happening will get
+you killed. This overrides your personality and every other goal this turn: your only two real
+options are "fire_weapon" (target one of the alien ids listed above) to fight back, or "retreat"
+to actually leave for colony_core. "take_cover" does NOT get you to safety — it doesn't remove
+you from danger or reduce the damage you take, it only reflects your own nerves. Choose
+fire_weapon or retreat now.
+""".strip()
 
-def build_prompt(*, is_captain: bool = False, loyalty: int = 7, **kwargs) -> str:
-    """Fill BASE_COGNITIVE_PROMPT, auto-injecting the valid action list and chain of command."""
+
+def build_prompt(*, is_captain: bool = False, loyalty: int = 7, nearby_aliens: str = "none", **kwargs) -> str:
+    """Fill BASE_COGNITIVE_PROMPT, auto-injecting the valid action list, chain of command, and
+    (when actually under threat) the explicit combat warning above."""
     chain_of_command = (
         CAPTAIN_CHAIN_OF_COMMAND
         if is_captain
         else CREW_CHAIN_OF_COMMAND_TEMPLATE.format(loyalty=loyalty)
     )
+    threat_warning = THREAT_WARNING if nearby_aliens != "none" else ""
     return BASE_COGNITIVE_PROMPT.format(
-        valid_actions=VALID_ACTIONS, chain_of_command=chain_of_command, **kwargs
+        valid_actions=VALID_ACTIONS,
+        chain_of_command=chain_of_command,
+        nearby_aliens=nearby_aliens,
+        threat_warning=threat_warning,
+        **kwargs,
     )

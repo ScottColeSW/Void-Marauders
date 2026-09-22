@@ -355,7 +355,16 @@ class WorldEngine:
             self._resolve_fire_weapon(agent, action)
 
         elif action.action_type == ActionType.TAKE_COVER:
+            # Deliberately no defensive effect -- it doesn't remove the agent
+            # from the sector or reduce incoming alien damage, only raises
+            # stress (bracing under fire is not calming). Was silently
+            # unlogged before, which hid a real problem: the LLM prompt used
+            # to recommend this as an escape option, and a real trial showed
+            # a colonist choosing it every tick while dying anyway, with
+            # nothing in the event log to explain why -- see prompts.py's
+            # THREAT_WARNING, which no longer claims this is safety.
             agent.stress_level = min(10, agent.stress_level + 1)
+            self._log(f"{agent.profile.name} takes cover, bracing for the next hit.")
 
         elif action.action_type == ActionType.RETREAT:
             agent.current_sector = "colony_core"
