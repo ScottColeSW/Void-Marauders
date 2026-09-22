@@ -30,7 +30,7 @@ An observer-style, autonomous colony simulation. A crew of independent AI agents
 ```
 
 - **Backend (`/backend`):** FastAPI app owning the world state and the tick loop. Each tick, aliens act on simple rules, and every colonist agent perceives its surroundings and decides an action (explore, gather, build, fight, retreat, confront crew, rest, ...).
-- **Frontend (now):** a zero-build web dashboard served directly by the backend at `http://127.0.0.1:8000/` — sector grid, colonist status, live event feed.
+- **Frontend (now):** a zero-build web dashboard served directly by the backend at `http://127.0.0.1:8000/` — a visual sector map (colonists and aliens shown where they actually are, unexplored/threatened sectors visually distinct), colonist status, live event feed.
 - **Frontend (planned):** Godot 4 (`/frontend`) — not built yet, tracked as Phase 4 below.
 - **Agent Cognition:** local LLM inference via **Ollama**, or a dependency-free mock brain for fast iteration.
 - **Persistent Memory:** [**Palimpsest**](https://github.com/ScottColeSW/Palimpsest) gives each colonist their own curated, weighted memory mesh — not just "similar text retrieved again." A colonist's read on a crewmate or a sector's safety can **reinforce** with repeated evidence, or **collide** and sit as an open, unresolved tension when new evidence contradicts it (this is what gives Karl's paranoia about Valerie actual teeth — a repeatedly-reinforced trust read that a single reckless act can genuinely collide with). Weight decays slowly over time if unreinforced, so old grudges soften rather than staying permanent. No Docker/vector-DB required — it's an in-process mesh per colonist, persisted to `backend/app/data/memory/<agent_id>.json` so memory survives a backend restart even though world state doesn't.
@@ -133,12 +133,16 @@ Open **http://127.0.0.1:8000/** as before. Agent monologue/dialogue is now real 
 ## 🧠 Core Agentic Gameplay Loop
 
 Each tick:
-1. **Environment step:** aliens attack any colonist sharing their sector; structures under construction progress. Rule-based, no LLM cost.
+1. **Environment step:** aliens attack any colonist sharing their sector; structures under construction progress; food and energy upkeep are charged (below). Rule-based, no LLM cost.
 2. **Perceive:** each living colonist gets a snapshot of their sector, nearby crew/aliens, colony resources, and (if memory is on) their standing reads on nearby crew and the current sector, any unresolved contradictions, and their most relevant recent history.
 3. **Decide:** the agent's cognition (mock heuristic or local LLM) returns a strict JSON action — inner monologue, spoken dialogue, one of a fixed set of action types, and a target.
 4. **Resolve:** the engine applies the action to world state and logs it to the event feed. If memory is on, the outcome is checked against that colonist's mesh — reinforcing a standing belief, opening a new contradiction, or just adding to their personal log.
 
-The colony has a real end state: it's lost if every colonist reaches 0 HP, and won once every alien threat is cleared and the colony has completed at least three structures. Either way the dashboard shows a clear banner and the tick loop stops.
+**Movement is real, not a teleport.** Sectors connect through `colony_core` in a hub-and-spoke graph (`app/core/world_seed.py`'s `SECTOR_ADJACENCY`, matching the dashboard's own map layout exactly) — from `colony_core` a colonist reaches anywhere in one move, but two outlying sectors are two moves apart, through the hub. A colonist heading somewhere unreachable in one hop moves toward it instead of teleporting, and continues the trip if they pick the same target again next turn.
+
+**Food and energy are real costs, not decoration.** Food drains every tick regardless of colonist count; if it can't be covered, the whole living crew takes starvation damage until someone gathers again. Energy costs 1/tick per *completed* structure to stay powered; left unpaid, structures decay and can be destroyed outright, undoing both the build progress and the win condition's structure count. Metal (spent building) and biomatter are the only resources without an ongoing drain.
+
+The colony has a real end state: it's lost if every colonist reaches 0 HP (starvation included), and won once every alien threat is cleared and the colony has completed at least three structures. Either way the dashboard shows a clear banner and the tick loop stops.
 
 ---
 
@@ -152,9 +156,14 @@ shape from this project's sibling, [Evo-LLM-Evolution2Civ](https://github.com/Sc
 cd backend
 python run_benchmark.py --scenario baseline --trials 3
 python run_benchmark.py --scenario swarm_pressure --models qwen2.5:3b,gemma2:2b
+python run_benchmark.py --scenario swarm_pressure --memory on --trials 3   # does memory help? -- see below
 python run_benchmark.py --report
 python run_benchmark.py --report --scenario swarm_pressure
 ```
+
+With the server running, open **http://127.0.0.1:8000/benchmark/report** (or click **BENCHMARK REPORT** in
+the dashboard header) for a chart report instead of the text leaderboard — it queries the same DB fresh on
+every load, so re-running a trial and reloading the page shows the new result with no restart needed.
 
 Every colonist's raw counters (idle ticks, cognition fallbacks, resources gathered, aliens
 killed, sectors explored, orders issued/complied/ignored, min health reached, ...) are tracked
@@ -167,10 +176,14 @@ formula changes). `--report` computes a 0-100 score per trial at read time inste
 `--models` is optional — omit it to benchmark the real default two-model roster as shipped, or
 pass one/several (cycled across the five colonists) for a controlled single-model comparison.
 Scenarios live in `app/core/benchmark_scenarios.py` (`baseline`, `swarm_pressure`,
-`resource_scarcity` today); the harness forces `COGNITION_MODE=llm` and `MEMORY_ENABLED=false`
-regardless of `.env` — real models are the whole point, and every trial reuses the same five
-fixed colonist IDs, so persistent memory would leak state between trials and break
-reproducibility.
+`resource_scarcity` today); the harness forces `COGNITION_MODE=llm` regardless of `.env` — real
+models are the whole point. `--memory {on,off}` (default `off`) controls Palimpsest memory
+during the trial — safe to turn on: `WorldEngine` takes a `memory_namespace` that prefixes every
+colonist's memory-store id with that trial's own unique id, so a trial's memories can never
+collide with live dashboard play or another trial. That's also the actual way to answer "does
+memory help": run the same scenario with `--memory on` and `--memory off` and compare — the
+chart report renders this scoped per-scenario, since different scenario categories use
+incompatible scoring formulas and shouldn't be pooled together.
 
 ---
 
@@ -181,4 +194,6 @@ reproducibility.
 - [x] **Phase 3:** Persistent episodic memory — agents recall past events, standing reads on crew/sectors, and unresolved contradictions via a [Palimpsest](https://github.com/ScottColeSW/Palimpsest) mesh per colonist.
 - [x] **Interim frontend:** zero-build web dashboard for observing the colony live.
 - [x] **Win/loss conditions:** colony wipeout ends the run; clearing all threats and completing 3 structures wins it.
+- [x] **Real space and real economy:** sector adjacency (hub-and-spoke through colony_core, matching the dashboard's map) replaces free teleportation; food and energy have real upkeep costs and consequences instead of climbing forever untouched.
+- [x] **Headless benchmarking:** `run_benchmark.py` drives the engine directly for reproducible model comparison, raw facts recorded (never a stored score), with a chart report served live from the running dashboard.
 - [ ] **Phase 4:** Godot UI integration — tile-based ship/colony rendering, scrolling speech bubbles, pathfinding.
