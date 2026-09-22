@@ -2,6 +2,38 @@ const POLL_MS = 2000;
 
 const RESOURCE_LABELS = { metal: "Metal", food: "Food", energy: "Energy", biomatter: "Biomatter" };
 
+// Hand-placed layout for the sim's fixed 8-sector world (see world_seed.py).
+// NOT a real coordinate/adjacency system -- the engine has none: a colonist
+// can move to any sector in a single action regardless of "distance" here
+// (see engine.py's _resolve_explore). This is purely a legibility aid, laid
+// out compass-style around colony_core. If world_seed.py's sectors change,
+// this table needs updating too -- there's no way to derive positions from
+// the backend since it doesn't model space at all.
+const SECTOR_LAYOUT = {
+  landing_ship: { x: 100, y: 220 },
+  colony_core: { x: 270, y: 220 },
+  resource_field_north: { x: 270, y: 80 },
+  resource_field_south: { x: 270, y: 360 },
+  geothermal_vent: { x: 430, y: 140 },
+  unexplored_east: { x: 430, y: 300 },
+  unexplored_west: { x: 100, y: 80 },
+  alien_nest: { x: 430, y: 420 },
+};
+
+const SECTOR_LABELS = {
+  landing_ship: "Landing Ship",
+  colony_core: "Colony Core",
+  resource_field_north: "N. Field",
+  resource_field_south: "S. Field",
+  geothermal_vent: "Geo Vent",
+  unexplored_east: "East",
+  unexplored_west: "West",
+  alien_nest: "Alien Nest",
+};
+
+const MAP_TILE_W = 108;
+const MAP_TILE_H = 64;
+
 async function fetchJSON(path) {
   const res = await fetch(path);
   if (!res.ok) throw new Error(`${path} -> ${res.status}`);
@@ -35,42 +67,92 @@ function renderResources(resources) {
     .join("");
 }
 
-function renderSectors(sectors, aliens, structures) {
-  const el = document.getElementById("sectors");
+function renderMap(sectors, agents, aliens, structures) {
+  const el = document.getElementById("map");
   const aliensBySector = groupBy(Object.values(aliens), (a) => a.sector_id);
   const structuresBySector = groupBy(Object.values(structures), (s) => s.sector_id);
+  const agentsBySector = groupBy(agents, (a) => a.current_sector);
 
-  el.innerHTML = Object.values(sectors)
+  const tiles = Object.values(sectors)
     .map((sector) => {
-      const classes = ["card"];
-      if (!sector.explored) classes.push("unexplored");
-      if (sector.threat_level > 0) classes.push("threat");
+      const pos = SECTOR_LAYOUT[sector.sector_id];
+      if (!pos) return ""; // unknown sector id -- skip rather than guess a position
+      const label = SECTOR_LABELS[sector.sector_id] || sector.sector_id;
+      const threatened = sector.threat_level > 0;
+      const x = pos.x - MAP_TILE_W / 2;
+      const y = pos.y - MAP_TILE_H / 2;
 
+      const sectorAliens = aliensBySector[sector.sector_id] || [];
+      const sectorStructures = structuresBySector[sector.sector_id] || [];
       const yieldText = Object.entries(sector.resource_yield || {})
         .map(([k, v]) => `${k}+${v}`)
         .join(", ");
+      const tooltip = [
+        sector.sector_id,
+        `${sector.sector_type} — ${sector.explored ? "explored" : "unexplored"}`,
+        threatened ? `threat level ${sector.threat_level}` : null,
+        yieldText ? `yield: ${yieldText}` : null,
+        sectorAliens.length ? `aliens: ${sectorAliens.map((a) => `${a.alien_id} (${a.health}hp)`).join(", ")}` : null,
+        sectorStructures.length
+          ? `built: ${sectorStructures.map((s) => `${s.structure_type} (${s.build_progress}%)`).join(", ")}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join("\n");
 
-      const alienList = (aliensBySector[sector.sector_id] || [])
-        .map((a) => `${a.alien_id} (${a.health}hp)`)
-        .join(", ");
+      const tileClass = ["map-tile", sector.explored ? "explored" : "unexplored", threatened ? "threat" : ""]
+        .join(" ")
+        .trim();
 
-      const structureList = (structuresBySector[sector.sector_id] || [])
-        .map((s) => `${s.structure_type} (${s.build_progress}%)`)
-        .join(", ");
+      const colonistMarkers = (agentsBySector[sector.sector_id] || [])
+        .map((a, i) => {
+          const cx = x + 15 + i * 17;
+          const cy = y + MAP_TILE_H - 13;
+          const captainClass = a.profile.is_captain ? " captain" : "";
+          return `
+            <circle cx="${cx}" cy="${cy}" r="7" class="map-colonist${captainClass}"><title>${escapeHtml(a.profile.name)} — ${a.health}hp</title></circle>
+            <text x="${cx}" y="${cy + 3}" text-anchor="middle" class="map-colonist-label">${escapeHtml(a.profile.name[0])}</text>`;
+        })
+        .join("");
+
+      const alienMarkers = sectorAliens
+        .map((a, i) => {
+          const cx = x + MAP_TILE_W - 13 - i * 14;
+          const cy = y + MAP_TILE_H - 13;
+          return `<circle cx="${cx}" cy="${cy}" r="5" class="map-alien"><title>${escapeHtml(a.alien_id)} — ${a.health}hp</title></circle>`;
+        })
+        .join("");
+
+      const structureBadge = sectorStructures.length
+        ? `<circle cx="${x + MAP_TILE_W - 11}" cy="${y + 11}" r="6" class="map-structure"><title>${sectorStructures
+            .map((s) => `${s.structure_type} ${s.build_progress}%`)
+            .join(", ")}</title></circle>`
+        : "";
 
       return `
-        <div class="${classes.join(" ")}">
-          <div class="card-title">${sector.sector_id}</div>
-          <div class="card-row"><span>${sector.sector_type}</span><span>${
-        sector.explored ? "explored" : "unexplored"
-      }</span></div>
-          ${sector.threat_level > 0 ? `<div class="card-row"><span>threat</span><span>${sector.threat_level}</span></div>` : ""}
-          ${yieldText ? `<div class="card-row"><span>yield</span><span>${yieldText}</span></div>` : ""}
-          ${alienList ? `<div class="card-row"><span>aliens</span><span>${alienList}</span></div>` : ""}
-          ${structureList ? `<div class="card-row"><span>built</span><span>${structureList}</span></div>` : ""}
-        </div>`;
+        <g class="${tileClass}">
+          <title>${escapeHtml(tooltip)}</title>
+          <rect x="${x}" y="${y}" width="${MAP_TILE_W}" height="${MAP_TILE_H}" rx="8" />
+          <text x="${pos.x}" y="${y + 19}" text-anchor="middle" class="map-tile-label">${escapeHtml(label)}</text>
+          ${structureBadge}
+          ${colonistMarkers}
+          ${alienMarkers}
+        </g>`;
     })
     .join("");
+
+  // Faint reference lines from colony_core to every other sector -- a
+  // legibility aid only, not real adjacency (see SECTOR_LAYOUT's own note).
+  const hub = SECTOR_LAYOUT.colony_core;
+  const links = Object.keys(sectors)
+    .filter((id) => id !== "colony_core" && SECTOR_LAYOUT[id])
+    .map((id) => {
+      const pos = SECTOR_LAYOUT[id];
+      return `<line x1="${hub.x}" y1="${hub.y}" x2="${pos.x}" y2="${pos.y}" class="map-link" />`;
+    })
+    .join("");
+
+  el.innerHTML = `<svg viewBox="0 0 540 460" class="map-svg" role="img" aria-label="Colony sector map">${links}${tiles}</svg>`;
 }
 
 function renderColonists(agents) {
@@ -133,7 +215,7 @@ async function refresh() {
     document.getElementById("tick-count").textContent = state.tick;
     renderStatusBanner(state.status);
     renderResources(state.colony_resources);
-    renderSectors(state.sectors, state.aliens, state.structures);
+    renderMap(state.sectors, agents, state.aliens, state.structures);
 
     const nameToLastLine = {};
     for (const line of events) {

@@ -178,6 +178,74 @@ main {
   color: var(--text-dim);
 }
 
+.map-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.map-link {
+  stroke: var(--border);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.map-tile rect {
+  fill: var(--panel-bg);
+  stroke: var(--border);
+  stroke-width: 1.5;
+  transition: fill 0.3s ease;
+}
+
+.map-tile.unexplored rect {
+  fill: #0a0f0c;
+  stroke-dasharray: 4 3;
+}
+
+.map-tile.threat rect {
+  stroke: var(--danger);
+}
+
+.map-tile-label {
+  fill: var(--text);
+  font-size: 10px;
+  font-family: inherit;
+}
+
+.map-tile.unexplored .map-tile-label {
+  fill: var(--text-dim);
+}
+
+.map-colonist {
+  fill: var(--accent);
+  stroke: var(--bg);
+  stroke-width: 1.5;
+}
+
+.map-colonist.captain {
+  stroke: var(--amber);
+  stroke-width: 2;
+}
+
+.map-colonist-label {
+  fill: var(--bg);
+  font-size: 8px;
+  font-weight: bold;
+  pointer-events: none;
+}
+
+.map-alien {
+  fill: var(--danger);
+  stroke: var(--bg);
+  stroke-width: 1.5;
+}
+
+.map-structure {
+  fill: var(--amber);
+  stroke: var(--bg);
+  stroke-width: 1.5;
+}
+
 .bar {
   height: 6px;
   border-radius: 3px;
