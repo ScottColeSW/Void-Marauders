@@ -9,8 +9,8 @@ __pycache__/
 # Local environment variables / secrets
 .env
 
-# Qdrant local storage volume
-qdrant_storage/
+# Per-colonist Palimpsest memory (generated at runtime, survives restarts on purpose)
+backend/app/data/memory/
 
 # Godot specific overrides and metadata
 .godot/

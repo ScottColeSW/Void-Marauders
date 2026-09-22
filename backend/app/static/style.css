@@ -50,6 +50,32 @@ h1 {
   font-size: 1rem;
 }
 
+.status-banner {
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1.25rem;
+  font-weight: bold;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 0.95rem;
+}
+
+.status-banner.hidden {
+  display: none;
+}
+
+.status-banner.won {
+  background: rgba(78, 224, 138, 0.12);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+
+.status-banner.lost {
+  background: rgba(224, 87, 78, 0.12);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
+
 .stat-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));

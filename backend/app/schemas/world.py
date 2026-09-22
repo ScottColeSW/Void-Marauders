@@ -19,6 +19,12 @@ class SectorType(str, Enum):
     SHIP = "ship"
 
 
+class ColonyStatus(str, Enum):
+    ACTIVE = "active"
+    WON = "won"
+    LOST = "lost"
+
+
 class Sector(BaseModel):
     sector_id: str
     sector_type: SectorType
@@ -51,6 +57,7 @@ class ColonyResources(BaseModel):
 
 class WorldState(BaseModel):
     tick: int = 0
+    status: ColonyStatus = ColonyStatus.ACTIVE
     colony_resources: ColonyResources = Field(default_factory=ColonyResources)
     sectors: Dict[str, Sector] = Field(default_factory=dict)
     aliens: Dict[str, AlienEntity] = Field(default_factory=dict)

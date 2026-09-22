@@ -1,13 +1,10 @@
-import os
 import random
 import threading
-import time
 import uuid
 from typing import Optional
 
-from app.core import cognition
+from app.core import cognition, memory
 from app.core.world_seed import create_initial_world
-from app.database import connection as memory_db
 from app.schemas.agent import (
     ActionType,
     AgentActionSchema,
@@ -15,7 +12,7 @@ from app.schemas.agent import (
     AgentState,
     PendingOrder,
 )
-from app.schemas.world import AlienEntity, SectorType, StructureEntity, WorldState
+from app.schemas.world import AlienEntity, ColonyStatus, SectorType, StructureEntity, WorldState
 
 MAX_EVENT_LOG = 200
 BUILD_PROGRESS_PER_ACTION = 25
@@ -24,11 +21,7 @@ ALIEN_ATTACK_DAMAGE = 10
 WEAPON_DAMAGE = 15
 PASSIVE_BUILD_PROGRESS = 5
 EXPLORE_ALIEN_ENCOUNTER_CHANCE = 0.25
-
-MEMORY_ENABLED = os.getenv("MEMORY_ENABLED", "true").lower() == "true"
-MEMORY_FAILURE_COOLDOWN_SECONDS = 30
-_memory_warning_logged = False
-_memory_unavailable_until: float = 0.0
+WIN_STRUCTURES_REQUIRED = 3
 
 
 class WorldEngine:
@@ -44,11 +37,35 @@ class WorldEngine:
 
     def tick(self) -> WorldState:
         with self._lock:
+            if self.world.status != ColonyStatus.ACTIVE:
+                return self.world
             self._environment_step()
             self._agent_step()
             self.world.tick += 1
+            self._check_end_conditions()
             self._trim_log()
+            memory.decay_all()
+            if self.world.tick % memory.SAVE_EVERY_N_TICKS == 0:
+                memory.save_all()
             return self.world
+
+    # -- win/loss ------------------------------------------------------------
+
+    def _check_end_conditions(self) -> None:
+        if all(agent.health <= 0 for agent in self.agents.values()):
+            self.world.status = ColonyStatus.LOST
+            self._log("[system] The colony has fallen. No crew remain.")
+            return
+
+        completed_structures = sum(
+            1 for s in self.world.structures.values() if s.build_progress >= 100
+        )
+        if not self.world.aliens and completed_structures >= WIN_STRUCTURES_REQUIRED:
+            self.world.status = ColonyStatus.WON
+            self._log(
+                "[system] Every hostile is cleared and the colony stands on solid "
+                f"ground — {completed_structures} structures complete. Victory."
+            )
 
     # -- logging -----------------------------------------------------------
 
@@ -76,6 +93,8 @@ class WorldEngine:
                     f"A creature at {alien.sector_id} attacks {target.profile.name} "
                     f"for {ALIEN_ATTACK_DAMAGE} damage."
                 )
+                if target.health == 0:
+                    self._log(f"[system] {target.profile.name} has fallen.")
 
         for structure in self.world.structures.values():
             if structure.build_progress < 100:
@@ -100,7 +119,13 @@ class WorldEngine:
             if action.spoken_dialogue:
                 self._log(f'{agent.profile.name}: "{action.spoken_dialogue}"')
             self._resolve_action(agent, action)
-            self._remember_action(agent, action)
+            memory.record_action(
+                agent.profile.agent_id,
+                action,
+                current_sector=agent.current_sector,
+                nearby_aliens=perception.nearby_aliens,
+                crew_names=self._crew_names(),
+            )
 
     # -- chain of command ----------------------------------------------------
 
@@ -120,11 +145,23 @@ class WorldEngine:
             )
             action = self._mechanical_order_action(agent, order.action_type)
             self._resolve_action(agent, action)
-            self._remember_action(agent, action)
+            memory.record_action(
+                agent.profile.agent_id,
+                action,
+                current_sector=agent.current_sector,
+                nearby_aliens=self._aliens_in_sector(agent.current_sector),
+                crew_names=self._crew_names(),
+            )
+            memory.record_order_outcome(
+                agent.profile.agent_id, order.captain_id, captain_name, complied=True
+            )
             return True
 
         agent.loyalty = max(0, agent.loyalty - 1)
         self._log(f"{agent.profile.name} ignores {captain_name}'s order.")
+        memory.record_order_outcome(
+            agent.profile.agent_id, order.captain_id, captain_name, complied=False
+        )
         if agent.loyalty <= 2 and agent.profile.agent_id not in self._low_loyalty_flagged:
             self._low_loyalty_flagged.add(agent.profile.agent_id)
             self._log(
@@ -163,6 +200,9 @@ class WorldEngine:
             target_id=target_id,
         )
 
+    def _aliens_in_sector(self, sector_id: str) -> list:
+        return [a.alien_id for a in self.world.aliens.values() if a.sector_id == sector_id]
+
     def _build_perception(self, agent: AgentState) -> AgentPerception:
         nearby_crew = [
             other.profile.agent_id
@@ -171,11 +211,7 @@ class WorldEngine:
             and other.current_sector == agent.current_sector
             and other.health > 0
         ]
-        nearby_aliens = [
-            alien.alien_id
-            for alien in self.world.aliens.values()
-            if alien.sector_id == agent.current_sector
-        ]
+        nearby_aliens = self._aliens_in_sector(agent.current_sector)
         return AgentPerception(
             agent_id=agent.profile.agent_id,
             current_sector=agent.current_sector,
@@ -183,50 +219,17 @@ class WorldEngine:
             nearby_aliens=nearby_aliens,
             colony_status=self.world.colony_resources,
             stress_level=agent.stress_level,
-            retrieved_memories=self._recall_memories(agent, nearby_crew, nearby_aliens),
+            retrieved_memories=memory.recall(
+                agent.profile.agent_id,
+                current_sector=agent.current_sector,
+                nearby_crew=nearby_crew,
+                nearby_aliens=nearby_aliens,
+                crew_names=self._crew_names(),
+            ),
         )
 
-    # -- memory (Qdrant, non-fatal on failure) -------------------------------
-
-    def _recall_memories(self, agent: AgentState, nearby_crew, nearby_aliens) -> list:
-        if not MEMORY_ENABLED or self._memory_on_cooldown():
-            return []
-        query_text = (
-            f"sector {agent.current_sector}, crew {nearby_crew}, aliens {nearby_aliens}"
-        )
-        try:
-            return memory_db.query_memories(agent.profile.agent_id, query_text, top_k=5)
-        except Exception as exc:
-            self._memory_failed(exc)
-            return []
-
-    def _remember_action(self, agent: AgentState, action: AgentActionSchema) -> None:
-        if not MEMORY_ENABLED or self._memory_on_cooldown():
-            return
-        text = (
-            f"{action.inner_monologue} Action: {action.action_type.value} "
-            f"target={action.target_id}. Said: '{action.spoken_dialogue}'"
-        )
-        try:
-            memory_db.upsert_memory(agent.profile.agent_id, self.world.tick, text)
-        except Exception as exc:
-            self._memory_failed(exc)
-
-    def _memory_on_cooldown(self) -> bool:
-        # After a failure, skip memory calls entirely for a cooldown window so a
-        # dead Qdrant/Ollama doesn't tax every agent, every tick, with a fresh
-        # connection attempt while it's down.
-        return time.monotonic() < _memory_unavailable_until
-
-    def _memory_failed(self, exc: Exception) -> None:
-        global _memory_warning_logged, _memory_unavailable_until
-        _memory_unavailable_until = time.monotonic() + MEMORY_FAILURE_COOLDOWN_SECONDS
-        if not _memory_warning_logged:
-            self._log(
-                f"[system] Memory store unavailable, retrying in "
-                f"{MEMORY_FAILURE_COOLDOWN_SECONDS}s ({exc})."
-            )
-            _memory_warning_logged = True
+    def _crew_names(self) -> dict:
+        return {a.profile.agent_id: a.profile.name for a in self.agents.values()}
 
     # -- action resolution ---------------------------------------------------
 

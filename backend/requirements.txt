@@ -3,5 +3,7 @@ uvicorn[standard]
 pydantic
 python-dotenv
 ollama
-qdrant-client
 requests
+# palimpsest is not on PyPI -- clone https://github.com/ScottColeSW/Palimpsest.git
+# as a sibling of this repo and install it into this venv with:
+#   pip install -e ../../Palimpsest

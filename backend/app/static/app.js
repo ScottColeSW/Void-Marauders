@@ -8,6 +8,20 @@ async function fetchJSON(path) {
   return res.json();
 }
 
+function renderStatusBanner(status) {
+  const el = document.getElementById("status-banner");
+  if (status === "won") {
+    el.className = "status-banner won";
+    el.textContent = "VICTORY — the colony is secure.";
+  } else if (status === "lost") {
+    el.className = "status-banner lost";
+    el.textContent = "COLONY LOST — no crew remain.";
+  } else {
+    el.className = "status-banner hidden";
+    el.textContent = "";
+  }
+}
+
 function renderResources(resources) {
   const el = document.getElementById("resources");
   el.innerHTML = Object.entries(RESOURCE_LABELS)
@@ -117,6 +131,7 @@ async function refresh() {
     ]);
 
     document.getElementById("tick-count").textContent = state.tick;
+    renderStatusBanner(state.status);
     renderResources(state.colony_resources);
     renderSectors(state.sectors, state.aliens, state.structures);
 

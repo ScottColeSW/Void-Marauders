@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.core import memory
 from app.core.engine import get_engine
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -22,9 +23,12 @@ _tick_task: Optional[asyncio.Task] = None
 
 async def _tick_loop() -> None:
     engine = get_engine()
+    loop = asyncio.get_running_loop()
     while True:
         await asyncio.sleep(TICK_INTERVAL_SECONDS)
-        engine.tick()
+        # tick() does blocking network I/O (Ollama calls) — run it off the event
+        # loop so it doesn't freeze every other request for the tick's duration.
+        await loop.run_in_executor(None, engine.tick)
 
 
 @asynccontextmanager
@@ -35,6 +39,7 @@ async def lifespan(app: FastAPI):
     yield
     if _tick_task:
         _tick_task.cancel()
+    memory.save_all()
 
 
 app = FastAPI(title="Void Marauders", lifespan=lifespan)
