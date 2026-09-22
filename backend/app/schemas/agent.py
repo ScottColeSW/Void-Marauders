@@ -12,6 +12,7 @@ class ActionType(str, Enum):
     REPAIR_STRUCTURE = "repair_structure"
     BUILD_STRUCTURE = "build_structure"
     GATHER_RESOURCE = "gather_resource"
+    CONTRIBUTE_RESOURCES = "contribute_resources"
     EXPLORE_SECTOR = "explore_sector"
     RETURN_TO_COLONY = "return_to_colony"
     FIRE_WEAPON = "fire_weapon"
@@ -37,6 +38,22 @@ class PendingOrder(BaseModel):
     action_type: ActionType
 
 
+class PersonalStock(BaseModel):
+    """A colonist's own private resource stash -- filled by gather_resource,
+    spent by contribute_resources (into the shared colony pool) or, for
+    food specifically, silently by the colonist themselves as a personal
+    hedge against starvation (see engine.py's _apply_food_upkeep). Mirrors
+    ColonyResources' shape but starts genuinely empty (all zero) -- that
+    class's own defaults describe a seeded starting colony, not a colonist
+    who hasn't gathered anything yet, so it can't be reused directly here
+    without every zero needing to be spelled out at every call site."""
+
+    metal: int = 0
+    food: int = 0
+    energy: int = 0
+    biomatter: int = 0
+
+
 class AgentStats(BaseModel):
     """Raw counters accumulated during play, incremented directly by
     WorldEngine as it resolves actions -- the same shape Evo's Tribe object
@@ -53,6 +70,7 @@ class AgentStats(BaseModel):
     min_health_reached: int = 100
     damage_taken_total: int = 0
     resources_gathered_total: int = 0
+    resources_contributed_total: int = 0
     aliens_killed: int = 0
     sectors_explored: int = 0
     orders_issued: int = 0
@@ -76,6 +94,7 @@ class AgentState(BaseModel):
     inventory: List[str] = Field(default_factory=list)
     loyalty: int = Field(default=7, ge=0, le=10)
     pending_order: Optional[PendingOrder] = None
+    personal_stock: PersonalStock = Field(default_factory=PersonalStock)
     stats: AgentStats = Field(default_factory=AgentStats)
 
 
@@ -87,6 +106,7 @@ class AgentPerception(BaseModel):
     nearby_crew: List[str] = Field(default_factory=list)
     nearby_aliens: List[str] = Field(default_factory=list)
     colony_status: ColonyResources
+    personal_stock: PersonalStock
     stress_level: int
     retrieved_memories: List[str] = Field(default_factory=list)
 

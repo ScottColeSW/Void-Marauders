@@ -66,7 +66,12 @@ def _mock_decide(
             order_action = ActionType.FIRE_WEAPON
         else:
             order_action = random.choice(
-                [ActionType.GATHER_RESOURCE, ActionType.BUILD_STRUCTURE, ActionType.EXPLORE_SECTOR]
+                [
+                    ActionType.GATHER_RESOURCE,
+                    ActionType.BUILD_STRUCTURE,
+                    ActionType.EXPLORE_SECTOR,
+                    ActionType.CONTRIBUTE_RESOURCES,
+                ]
             )
         return AgentActionSchema(
             inner_monologue=f"{name} decides the crew needs direction.",
@@ -74,6 +79,29 @@ def _mock_decide(
             action_type=ActionType.ISSUE_ORDER,
             target_id=target,
             order_action=order_action,
+        )
+
+    holding_stock = any(
+        getattr(agent.personal_stock, field) > 0
+        for field in ("metal", "food", "energy", "biomatter")
+    )
+    if holding_stock and perception.current_sector == "colony_core":
+        return AgentActionSchema(
+            inner_monologue=f"{name} decides to hand over what they've gathered.",
+            spoken_dialogue="Adding this to the stores.",
+            action_type=ActionType.CONTRIBUTE_RESOURCES,
+            target_id=None,
+        )
+    if holding_stock and random.random() < 0.5:
+        # Mock brain is a deliberately naive baseline: it shares reasonably
+        # promptly rather than reasoning about hoarding, so the hoard-vs-share
+        # tension shows up as a real behavioral contrast against LLM
+        # cognition rather than being unreachable in mock mode at all.
+        return AgentActionSchema(
+            inner_monologue=f"{name} decides to head back and drop off what they've gathered.",
+            spoken_dialogue="Heading back to the colony to share this.",
+            action_type=ActionType.EXPLORE_SECTOR,
+            target_id="colony_core",
         )
 
     if not sector.explored:
@@ -153,6 +181,10 @@ def _llm_decide(agent: AgentState, perception: AgentPerception) -> AgentActionSc
         food=perception.colony_status.food,
         energy=perception.colony_status.energy,
         biomatter=perception.colony_status.biomatter,
+        personal_metal=perception.personal_stock.metal,
+        personal_food=perception.personal_stock.food,
+        personal_energy=perception.personal_stock.energy,
+        personal_biomatter=perception.personal_stock.biomatter,
         retrieved_memories="\n".join(perception.retrieved_memories) or "None yet.",
     )
 

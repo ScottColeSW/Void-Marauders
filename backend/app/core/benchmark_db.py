@@ -31,7 +31,7 @@ DEFAULT_DB_PATH = "logs/benchmark_results.db"
 
 _TRIAL_AGENT_INT_COLUMNS = (
     "survived", "final_health", "min_health_reached", "damage_taken_total",
-    "resources_gathered_total", "aliens_killed", "sectors_explored",
+    "resources_gathered_total", "resources_contributed_total", "aliens_killed", "sectors_explored",
     "cognition_fallbacks", "orders_issued", "orders_complied", "orders_ignored",
     "risky_orders_complied", "risky_orders_backfired",
     "idle_count", "final_loyalty", "is_captain",
@@ -131,6 +131,7 @@ def extract_agent_facts(agent) -> dict:
         "min_health_reached": stats.min_health_reached,
         "damage_taken_total": stats.damage_taken_total,
         "resources_gathered_total": stats.resources_gathered_total,
+        "resources_contributed_total": stats.resources_contributed_total,
         "aliens_killed": stats.aliens_killed,
         "sectors_explored": stats.sectors_explored,
         "cognition_fallbacks": stats.cognition_fallbacks,

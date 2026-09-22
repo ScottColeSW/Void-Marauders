@@ -18,7 +18,12 @@ from typing import List
 
 from .benchmark_scenarios import SCENARIOS, Scenario
 
-SCORING_VERSION = 1
+SCORING_VERSION = 2
+# Bumped 1->2: _score_economy now weights resources_contributed_total, not
+# just resources_gathered_total -- gathering alone stopped helping the
+# colony once gather_resource started filling personal_stock instead of the
+# shared pool (see engine.py), so scoring only raw gathering would have kept
+# rewarding pure hoarding as if it were productive.
 
 # 8 sectors total in create_initial_world(); 4 start explored (landing_ship,
 # colony_core, resource_field_north, resource_field_south), leaving 4 an
@@ -69,12 +74,17 @@ def _score_combat(facts: dict, tick_budget: int, scenario: Scenario) -> float:
 def _score_economy(facts: dict, tick_budget: int) -> float:
     if not facts["survived"]:
         return 0.0
-    # A single sector yields ~5-8 per gather action; 100 total across a
-    # 100-tick budget is a deliberately generous target, not a tight cap.
-    gathered = min(1.0, facts["resources_gathered_total"] / 100) * 60
+    # gather_resource fills a colonist's personal_stock now, not the shared
+    # pool directly -- only contribute_resources (from colony_core) actually
+    # helps the colony. Hoarding everything you gather is a real, legal
+    # choice, not a zero, so raw gathering still earns some credit -- but
+    # contribution is the real signal for "did this colonist's economic
+    # activity actually help," and is weighted accordingly.
+    contributed = min(1.0, facts["resources_contributed_total"] / 80) * 45
+    gathered = min(1.0, facts["resources_gathered_total"] / 100) * 15
     reliability = _reliability_score(facts, tick_budget, weight=20)
     activity = _activity_score(facts, tick_budget, weight=20)
-    return round(gathered + reliability + activity, 1)
+    return round(contributed + gathered + reliability + activity, 1)
 
 
 def score_agent(facts: dict, tick_budget: int, scenario: Scenario) -> float:

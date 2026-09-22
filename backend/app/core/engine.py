@@ -187,6 +187,15 @@ class WorldEngine:
         resources.food = 0
         self._log("[system] Food stores are empty — the colony is starving.")
         for agent in living:
+            # The actual hoard-vs-share incentive: a colonist sitting on
+            # personal food eats their own stash and is spared, individually,
+            # while a colonist who contributed everything (or never gathered)
+            # starves right alongside everyone else. Hoarding food is
+            # personally rational exactly when the shared pool is running
+            # dry -- which is exactly when contributing it would help most.
+            if agent.personal_stock.food > 0:
+                agent.personal_stock.food -= 1
+                continue
             health_before = agent.health
             agent.health = max(0, agent.health - STARVATION_DAMAGE)
             agent.stress_level = min(10, agent.stress_level + 1)
@@ -365,6 +374,7 @@ class WorldEngine:
             nearby_crew=nearby_crew,
             nearby_aliens=nearby_aliens,
             colony_status=self.world.colony_resources,
+            personal_stock=agent.personal_stock,
             stress_level=agent.stress_level,
             retrieved_memories=memory.recall(
                 self._memory_id(agent.profile.agent_id),
@@ -385,18 +395,30 @@ class WorldEngine:
 
         if action.action_type == ActionType.GATHER_RESOURCE and sector:
             if sector.resource_yield:
+                # Gathered resources go to the colonist's own personal_stock,
+                # not the shared pool directly -- they have to actively
+                # contribute_resources to make it collective. This is the
+                # actual hoard-vs-share tension: colony-level costs (below,
+                # in _resolve_build/_apply_food_upkeep/_apply_energy_upkeep)
+                # only ever draw from the shared pool, so a colonist who
+                # gathers and never contributes is personally sitting on
+                # resources the colony can't use at all.
                 gathered = []
                 for resource, expected in sector.resource_yield.items():
                     amount = max(1, round(expected * random.uniform(
                         RESOURCE_YIELD_VARIANCE_LOW, RESOURCE_YIELD_VARIANCE_HIGH
                     )))
-                    current = getattr(self.world.colony_resources, resource.value)
-                    setattr(self.world.colony_resources, resource.value, current + amount)
+                    current = getattr(agent.personal_stock, resource.value)
+                    setattr(agent.personal_stock, resource.value, current + amount)
                     agent.stats.resources_gathered_total += amount
                     gathered.append(f"{resource.value}+{amount}")
                 self._log(
-                    f"{agent.profile.name} gathers {', '.join(gathered)} from {sector.sector_id}."
+                    f"{agent.profile.name} gathers {', '.join(gathered)} from {sector.sector_id} "
+                    "(personal stock)."
                 )
+
+        elif action.action_type == ActionType.CONTRIBUTE_RESOURCES:
+            self._resolve_contribute(agent, action.target_id)
 
         elif action.action_type == ActionType.EXPLORE_SECTOR:
             self._resolve_explore(agent, action)
@@ -504,6 +526,72 @@ class WorldEngine:
                     f"A hostile creature ambushes {agent.profile.name} at {target_sector.sector_id}!"
                 )
         agent.current_sector = target_sector.sector_id
+
+    def _resolve_contribute(self, agent: AgentState, target_id: Optional[str]) -> None:
+        # Requires actually being at colony_core -- contributing isn't a free
+        # radio call, it's walking your stash back to the shared stores.
+        # That travel cost is part of the incentive: hoarding is not just an
+        # active choice, it's the path of least resistance from anywhere
+        # else on the map.
+        if agent.current_sector != "colony_core":
+            self._log(
+                f"{agent.profile.name} would need to be at colony_core to contribute "
+                "personal stock to the colony."
+            )
+            return
+
+        stock = agent.personal_stock
+        request = self._parse_contribution_request(target_id)
+        if request is not None:
+            # A real hoarder doesn't have to be all-or-nothing -- handing
+            # over "food:3" out of a stash of 10 looks cooperative while
+            # quietly keeping the rest. target_id="resource:amount"; amount
+            # is clamped to what they actually have.
+            resource, requested_amount = request
+            available = getattr(stock, resource)
+            amount = min(requested_amount, available)
+            fields_and_amounts = [(resource, amount)] if amount > 0 else []
+        else:
+            # No specific amount given (or an unparseable target_id) --
+            # contribute everything, the simple default.
+            fields_and_amounts = [
+                (field, getattr(stock, field))
+                for field in ("metal", "food", "energy", "biomatter")
+                if getattr(stock, field) > 0
+            ]
+
+        contributed = []
+        for field, amount in fields_and_amounts:
+            current = getattr(self.world.colony_resources, field)
+            setattr(self.world.colony_resources, field, current + amount)
+            setattr(stock, field, getattr(stock, field) - amount)
+            agent.stats.resources_contributed_total += amount
+            contributed.append(f"{field}+{amount}")
+
+        if not contributed:
+            self._log(f"{agent.profile.name} has nothing personal to contribute.")
+            return
+        held_back = any(getattr(stock, field) > 0 for field in ("metal", "food", "energy", "biomatter"))
+        note = " — keeping the rest for themselves" if held_back else ""
+        self._log(f"{agent.profile.name} contributes {', '.join(contributed)} to the colony{note}.")
+
+    @staticmethod
+    def _parse_contribution_request(target_id: Optional[str]):
+        """Parses target_id as "resource:amount" (e.g. "food:3") for a
+        partial contribution. None or anything that doesn't parse means
+        "no specific amount requested" -- the caller falls back to
+        contributing everything, the same forgiving default cognition.py's
+        own fallback philosophy uses elsewhere rather than erroring."""
+        if not target_id or ":" not in target_id:
+            return None
+        resource, _, amount_str = target_id.partition(":")
+        if resource not in ("metal", "food", "energy", "biomatter"):
+            return None
+        try:
+            amount = int(amount_str)
+        except ValueError:
+            return None
+        return (resource, amount) if amount > 0 else None
 
     def _resolve_build(self, agent: AgentState, action: AgentActionSchema) -> None:
         resources = self.world.colony_resources
