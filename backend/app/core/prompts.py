@@ -23,33 +23,22 @@ CURRENT ENVIRONMENT DATA:
 - Nearby Crew: {nearby_crew}
 - Nearby Alien Threats: {nearby_aliens}
 {threat_warning}
-- Colony Stockpile (shared, everyone draws from this): metal={metal}, food={food}, energy={energy}, biomatter={biomatter}
-  (food and energy are consumed every tick just to keep the colony running — if food runs out
-  the whole crew starts starving, and if energy runs out your built structures start falling
-  into disrepair and can be lost entirely. Metal and biomatter don't drain on their own, but
-  metal is spent building new structures and biomatter is spent repairing damaged ones — the
-  only place biomatter comes from is alien_nest, the same sector the aliens live in, so keeping
-  a repair-worthy stockpile means someone has to go in harm's way for it.)
-- Your Personal Stock (yours alone, nobody else can touch it): metal={personal_metal}, food={personal_food},
+- Colony Stockpile (shared): metal={metal}, food={food}, energy={energy}, biomatter={biomatter}
+  Food and energy drain every tick. Food at zero starves the crew. Energy at zero decays
+  completed structures and can destroy them. Metal is spent building; biomatter is spent
+  repairing. Biomatter only comes from alien_nest — the sector the aliens live in.
+- Your Personal Stock (yours alone): metal={personal_metal}, food={personal_food},
   energy={personal_energy}, biomatter={personal_biomatter}
-  ("gather_resource" fills YOUR personal stock, not the shared one — the colony can't build,
-  power structures, or feed anyone from what's sitting in your pocket until you choose
-  "contribute_resources", and you have to actually be at colony_core to do that — it's not a free
-  radio call, you have to walk it back. Leave target_id null to hand over everything you're
-  holding, or give a specific amount of one resource as "resource:amount" (e.g. "food:3") to
-  contribute only part of it and quietly keep the rest — looking cooperative doesn't require
-  giving up your whole reserve. Keeping personal food has
-  one real upside: if the shared food stockpile ever hits zero, you'll quietly eat from your own
-  stash instead of starving — but everyone who contributed everything, or never gathered at all,
-  starves right alongside each other when that happens. Hoarding protects you personally at the
-  colony's expense; sharing helps everyone including you, but leaves you with nothing held back
-  for yourself if it runs out.)
+  "gather_resource" fills this, not the colony stockpile — it helps no one until you use
+  "contribute_resources" at colony_core. target_id null gives everything; "resource:amount"
+  (e.g. "food:3") gives part and keeps the rest. Personal food is worth keeping: if the shared
+  food stockpile hits zero, you eat from your own stash instead of starving. Everyone else
+  starves together when that happens.
 {contribution_reminder}
 
-Sectors connect through colony_core, not directly to each other — from colony_core you can
-reach anywhere in one move, but going from one outlying sector straight to another takes two
-moves (you'll pass through colony_core first). Picking a distant sector as your target again
-next turn continues the trip from wherever you ended up.
+Sectors connect through colony_core only. One move from colony_core reaches anywhere; one
+outlying sector to another takes two moves, through colony_core. Target the same distant sector
+again next turn to continue the trip.
 
 HISTORICAL MEMORIES EXTRACTED FROM YOUR BRAIN:
 {retrieved_memories}
@@ -72,23 +61,18 @@ Output only the JSON object, strictly adhering to that schema.
 """.strip()
 
 CAPTAIN_CHAIN_OF_COMMAND = """
-You are the Captain — you may use action_type "issue_order" with target_id set to a nearby crew
-member's id and order_action set to what you want them to do. Whether they obey depends on their
-loyalty to you; don't expect blind obedience. Sending someone into a fight is a real gamble on
-your authority, not a free action: if they obey and it goes badly for them, your crew's trust in
-your judgement takes a real hit — worse than if they'd simply ignored you. If they obey a risky
-order and it pays off, trust grows more than it would from a routine one. Reckless orders that
-keep backfiring will cost you your command; think about whether an order is actually worth asking
-someone to risk their life for before you give it.
+You are the Captain. Use action_type "issue_order" with target_id set to a crew member and
+order_action set to what they should do. Obedience depends on their loyalty to you, not
+guaranteed. Ordering someone into danger is a real gamble: if they comply and get hurt, your
+authority takes a bigger hit than if they'd simply ignored you; if it pays off, trust grows more
+than from a routine order. Reckless orders that keep backfiring will cost you your command.
 """.strip()
 
 CREW_CHAIN_OF_COMMAND_TEMPLATE = """
-Valerie is the Captain. You are not — you cannot issue_order. Your loyalty to her is {loyalty}/10.
-If she has just given you an order, weigh it against your own judgement and your loyalty to her —
-higher loyalty means you're more inclined to comply, lower loyalty means you're more likely to act
-on your own judgement instead. If complying would put you somewhere aliens are already present,
-that's a real gamble, not routine duty — refusing a clearly dangerous order costs you little to
-nothing, so weigh whether this particular order is one worth risking your life to follow.
+Valerie is the Captain. You cannot issue_order. Your loyalty to her is {loyalty}/10 — higher
+means more inclined to comply, lower means more likely to act on your own judgement instead. If
+her order sends you somewhere aliens already are, refusing costs you little; complying is a real
+gamble on your life, not routine duty.
 """.strip()
 
 # Real trials exposed why colonists never fought back: "Nearby Alien Threats: alien_a1b2c3" is
@@ -101,15 +85,13 @@ nothing, so weigh whether this particular order is one worth risking your life t
 # looked like -- a strong personality trait (curious, optimistic) winning out over an
 # unlabeled threat.
 THREAT_WARNING = """
-WARNING — YOU ARE UNDER ATTACK RIGHT NOW. At least one hostile creature is sharing your sector and is
-dealing real, serious damage to you (and possibly your crewmates) every tick you don't respond —
-continuing to gather, build, explore, rest, or make small talk while this is happening will get
-you killed. This overrides your personality and every other goal this turn: your best options are
-"fire_weapon" (target one of the alien ids listed above) to fight back, or "retreat" to actually
-leave for colony_core — either one can end the threat outright. "take_cover" does NOT get you to
-safety and does NOT end the threat: it only blunts the damage of the next hit, and only if you're
-still here to take it — it's a fallback for when you truly have neither a clear shot nor a way
-out, not a substitute for actually fighting or fleeing. Choose fire_weapon or retreat if you can.
+WARNING — YOU ARE UNDER ATTACK RIGHT NOW. A hostile creature is sharing your sector, dealing real
+damage every tick you don't respond. Gathering, building, exploring, resting, or small talk will
+get you killed. This overrides your personality and every other goal this turn: use "fire_weapon"
+(target one of the alien ids above) to fight back, or "retreat" to leave for colony_core — either
+one ends the threat outright. "take_cover" does NOT end the threat or get you to safety; it only
+blunts the next hit, and only if you're still here to take it. Use it only when you truly have
+neither a clear shot nor a way out.
 """.strip()
 
 
@@ -154,27 +136,17 @@ def _contribution_reminder(
     held_str = ", ".join(held)
     if current_sector == "colony_core":
         return (
-            "REMINDER: You are at colony_core RIGHT NOW, holding "
-            f"{held_str} in your personal stock. Your action_type this turn should be "
-            '"contribute_resources" (target_id null hands over everything, or use '
-            '"resource:amount" to give part of it). Nothing else available to you this turn — '
-            "gathering more, exploring, resting, building — helps the colony as directly as this "
-            "one action does, and it only takes one turn. Do it now, while you're already here."
+            f"REMINDER: You are at colony_core holding {held_str}. Use action_type "
+            '"contribute_resources" this turn (target_id null for everything, or '
+            '"resource:amount" for part of it). Nothing else this turn helps the colony as '
+            "directly. Do it now."
         )
     non_food_held = personal_metal or personal_energy or personal_biomatter
-    no_upside = (
-        "Metal, energy, and biomatter do nothing for you personally held onto — there's no real "
-        "reason to keep those specifically; only food has a genuine personal upside (see above). "
-        if non_food_held
-        else ""
-    )
+    no_upside = "Metal, energy, and biomatter have no personal upside — only food does. " if non_food_held else ""
     return (
-        f"NOTE: You're holding {held_str} at {current_sector}, far from colony_core, and it "
-        "helps no one — not the colony's food or energy upkeep, not its ability to build or "
-        'repair — sitting out here. Your action_type this turn should be "explore_sector" with '
-        'target_id "colony_core" to start heading back; once you arrive, contribute it. '
-        f"{no_upside}Don't keep gathering more of what you're already sitting on instead of "
-        "bringing it in."
+        f"NOTE: You're holding {held_str} at {current_sector}. It helps no one until it's at "
+        'colony_core. Use action_type "explore_sector" with target_id "colony_core" to head '
+        f"back, then contribute it. {no_upside}Don't gather more instead of bringing this in."
     )
 
 
