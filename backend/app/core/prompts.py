@@ -103,6 +103,18 @@ neither a clear shot nor a way out.
 # this mirrors the exact fix that worked for combat (THREAT_WARNING) -- a loud, situational,
 # impossible-to-skim block that only appears when it's actually relevant, naming the concrete
 # amounts held right now instead of describing the mechanic in the abstract.
+#
+# A first version fired on ANY nonzero stock and made things worse, not better: a follow-up real
+# batch showed contributed_resources_total going from 0 to a real number, but total gathered
+# collapsed ~8.5x (784 -> 92) and colony survival in the economy scenarios dropped from 4/6 trials
+# reaching the tick budget to 0/6. Nagging a colonist to stop and head back after a single unit of
+# anything interrupted the early, low-stakes gathering that used to accumulate a real stockpile
+# before it mattered where it went. CONTRIBUTION_REMINDER_THRESHOLD lets small, early holdings
+# build up in peace; the reminder only engages once there's something substantial enough that
+# heading back is actually worth the trip.
+CONTRIBUTION_REMINDER_THRESHOLD = 5
+
+
 def _contribution_reminder(
     current_sector: str,
     personal_metal: int,
@@ -121,6 +133,9 @@ def _contribution_reminder(
         # alien-free in every seeded scenario, so this only matters for edge cases,
         # but combat survival has to win that edge case, not lose it.
         return ""
+    total_held = personal_metal + personal_food + personal_energy + personal_biomatter
+    if total_held < CONTRIBUTION_REMINDER_THRESHOLD:
+        return ""
     held = [
         f"{name}={amount}"
         for name, amount in (
@@ -131,8 +146,6 @@ def _contribution_reminder(
         )
         if amount > 0
     ]
-    if not held:
-        return ""
     held_str = ", ".join(held)
     if current_sector == "colony_core":
         return (
