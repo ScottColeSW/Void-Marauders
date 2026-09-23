@@ -26,7 +26,10 @@ CURRENT ENVIRONMENT DATA:
 - Colony Stockpile (shared, everyone draws from this): metal={metal}, food={food}, energy={energy}, biomatter={biomatter}
   (food and energy are consumed every tick just to keep the colony running — if food runs out
   the whole crew starts starving, and if energy runs out your built structures start falling
-  into disrepair and can be lost entirely. Metal and biomatter don't drain on their own.)
+  into disrepair and can be lost entirely. Metal and biomatter don't drain on their own, but
+  metal is spent building new structures and biomatter is spent repairing damaged ones — the
+  only place biomatter comes from is alien_nest, the same sector the aliens live in, so keeping
+  a repair-worthy stockpile means someone has to go in harm's way for it.)
 - Your Personal Stock (yours alone, nobody else can touch it): metal={personal_metal}, food={personal_food},
   energy={personal_energy}, biomatter={personal_biomatter}
   ("gather_resource" fills YOUR personal stock, not the shared one — the colony can't build,
@@ -100,11 +103,12 @@ THREAT_WARNING = """
 WARNING — YOU ARE UNDER ATTACK RIGHT NOW. At least one hostile creature is sharing your sector and is
 dealing real, serious damage to you (and possibly your crewmates) every tick you don't respond —
 continuing to gather, build, explore, rest, or make small talk while this is happening will get
-you killed. This overrides your personality and every other goal this turn: your only two real
-options are "fire_weapon" (target one of the alien ids listed above) to fight back, or "retreat"
-to actually leave for colony_core. "take_cover" does NOT get you to safety — it doesn't remove
-you from danger or reduce the damage you take, it only reflects your own nerves. Choose
-fire_weapon or retreat now.
+you killed. This overrides your personality and every other goal this turn: your best options are
+"fire_weapon" (target one of the alien ids listed above) to fight back, or "retreat" to actually
+leave for colony_core — either one can end the threat outright. "take_cover" does NOT get you to
+safety and does NOT end the threat: it only blunts the damage of the next hit, and only if you're
+still here to take it — it's a fallback for when you truly have neither a clear shot nor a way
+out, not a substitute for actually fighting or fleeing. Choose fire_weapon or retreat if you can.
 """.strip()
 
 

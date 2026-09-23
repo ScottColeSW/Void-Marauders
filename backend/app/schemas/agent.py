@@ -96,6 +96,10 @@ class AgentState(BaseModel):
     pending_order: Optional[PendingOrder] = None
     personal_stock: PersonalStock = Field(default_factory=PersonalStock)
     stats: AgentStats = Field(default_factory=AgentStats)
+    # Set for exactly one environment_step by choosing take_cover; consumed
+    # (cleared) by that next attack phase whether or not an alien actually
+    # attacked this colonist. See engine.py's TAKE_COVER handling.
+    taking_cover: bool = False
 
 
 class AgentPerception(BaseModel):

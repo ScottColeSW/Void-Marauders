@@ -17,6 +17,17 @@ from app.schemas.world import AlienEntity, ColonyStatus, SectorType, StructureEn
 MAX_EVENT_LOG = 200
 BUILD_PROGRESS_PER_ACTION = 25
 STRUCTURE_METAL_COST = 15
+# Biomatter had zero sink anywhere -- gathered, tracked in every stock and
+# every report chart, spent nowhere. It only comes from alien_nest (the same
+# sector that's seeded with both aliens and the highest threat_level in the
+# world -- see world_seed.py), so it was pure risk with no payoff: nothing
+# rewarded going there over any other resource field. Repair was also
+# genuinely free before this -- REPAIR_STRUCTURE just added +20 hp with no
+# cost check at all, unlike BUILD_STRUCTURE's metal cost. Tying repair to
+# biomatter closes both gaps at once: structures decay from energy shortfall
+# (STRUCTURE_DECAY_HP) and can now only be fixed with a resource that
+# requires someone to go into the dangerous sector for it.
+STRUCTURE_REPAIR_BIOMATTER_COST = 5
 ALIEN_ATTACK_DAMAGE = 10
 WEAPON_DAMAGE = 15
 PASSIVE_BUILD_PROGRESS = 5
@@ -62,6 +73,17 @@ CAUTIOUS_DEFIANCE_LOYALTY_PENALTY = 0
 # instead of a known constant.
 RESOURCE_YIELD_VARIANCE_LOW = 0.5
 RESOURCE_YIELD_VARIANCE_HIGH = 1.5
+
+# take_cover used to do nothing but raise stress -- a real trial showed a
+# colonist choosing it every tick while dying anyway, with the prompt now
+# fixed (THREAT_WARNING) to stop recommending it as an escape. But a no-op
+# action a prompt can still legally choose is a trap of its own: give it a
+# real, smaller effect than fire_weapon/retreat rather than leaving it inert.
+# Cover only helps against the NEXT attack phase (environment_step runs
+# before agent_step within a tick -- see tick()), and is consumed whether or
+# not an alien actually attacks that tick, so it has to be re-chosen every
+# tick to stay protected, same as bracing in real cover would.
+TAKE_COVER_DAMAGE_REDUCTION = 0.5
 
 
 class WorldEngine:
@@ -150,18 +172,38 @@ class WorldEngine:
             if occupants:
                 target = random.choice(occupants)
                 health_before = target.health
-                target.health = max(0, target.health - ALIEN_ATTACK_DAMAGE)
-                target.stress_level = min(10, target.stress_level + 1)
-                target.stats.damage_taken_total += health_before - target.health
-                target.stats.min_health_reached = min(
-                    target.stats.min_health_reached, target.health
-                )
-                self._log(
-                    f"A creature at {alien.sector_id} attacks {target.profile.name} "
-                    f"for {ALIEN_ATTACK_DAMAGE} damage."
-                )
+                if target.taking_cover:
+                    damage = max(1, round(ALIEN_ATTACK_DAMAGE * TAKE_COVER_DAMAGE_REDUCTION))
+                    target.taking_cover = False
+                    target.health = max(0, target.health - damage)
+                    target.stress_level = min(10, target.stress_level + 1)
+                    target.stats.damage_taken_total += health_before - target.health
+                    target.stats.min_health_reached = min(
+                        target.stats.min_health_reached, target.health
+                    )
+                    self._log(
+                        f"A creature at {alien.sector_id} attacks {target.profile.name}, "
+                        f"but cover blunts it to {damage} damage."
+                    )
+                else:
+                    target.health = max(0, target.health - ALIEN_ATTACK_DAMAGE)
+                    target.stress_level = min(10, target.stress_level + 1)
+                    target.stats.damage_taken_total += health_before - target.health
+                    target.stats.min_health_reached = min(
+                        target.stats.min_health_reached, target.health
+                    )
+                    self._log(
+                        f"A creature at {alien.sector_id} attacks {target.profile.name} "
+                        f"for {ALIEN_ATTACK_DAMAGE} damage."
+                    )
                 if target.health == 0:
                     self._log(f"[system] {target.profile.name} has fallen.")
+
+        # Cover is a one-tick brace: clear it for everyone now, attacked or
+        # not (only one occupant per alien gets attacked per tick, so an
+        # uninvolved colonist's flag would otherwise carry over unearned).
+        for a in self.agents.values():
+            a.taking_cover = False
 
         for structure in self.world.structures.values():
             if structure.build_progress < 100:
@@ -432,8 +474,16 @@ class WorldEngine:
         elif action.action_type == ActionType.REPAIR_STRUCTURE and action.target_id:
             structure = self.world.structures.get(action.target_id)
             if structure:
-                structure.hp = min(100, structure.hp + 20)
-                self._log(f"{agent.profile.name} repairs the {structure.structure_type}.")
+                resources = self.world.colony_resources
+                if resources.biomatter < STRUCTURE_REPAIR_BIOMATTER_COST:
+                    self._log(
+                        f"{agent.profile.name} wants to repair the {structure.structure_type} "
+                        "but there isn't enough biomatter."
+                    )
+                else:
+                    resources.biomatter -= STRUCTURE_REPAIR_BIOMATTER_COST
+                    structure.hp = min(100, structure.hp + 20)
+                    self._log(f"{agent.profile.name} repairs the {structure.structure_type}.")
 
         elif action.action_type == ActionType.REPAIR_HULL:
             self._log(f"{agent.profile.name} patches up the ship's hull.")
@@ -442,14 +492,14 @@ class WorldEngine:
             self._resolve_fire_weapon(agent, action)
 
         elif action.action_type == ActionType.TAKE_COVER:
-            # Deliberately no defensive effect -- it doesn't remove the agent
-            # from the sector or reduce incoming alien damage, only raises
-            # stress (bracing under fire is not calming). Was silently
-            # unlogged before, which hid a real problem: the LLM prompt used
-            # to recommend this as an escape option, and a real trial showed
-            # a colonist choosing it every tick while dying anyway, with
-            # nothing in the event log to explain why -- see prompts.py's
-            # THREAT_WARNING, which no longer claims this is safety.
+            # Real but partial effect: blunts (doesn't prevent) the NEXT
+            # attack phase's damage if this colonist gets hit before choosing
+            # again -- see TAKE_COVER_DAMAGE_REDUCTION and _environment_step.
+            # It does not remove the agent from the sector, so it is still
+            # strictly worse than fire_weapon/retreat against a real threat
+            # (per prompts.py's THREAT_WARNING) -- it's a fallback for when
+            # neither of those is a good option, not an escape.
+            agent.taking_cover = True
             agent.stress_level = min(10, agent.stress_level + 1)
             self._log(f"{agent.profile.name} takes cover, bracing for the next hit.")
 
