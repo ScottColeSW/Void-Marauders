@@ -210,6 +210,28 @@ starvation stakes. Worth knowing before reading the hoard-vs-share mechanic (abo
 tension: under real local-model play so far, hoarding isn't a rational strategic choice models are
 weighing against sharing — it's closer to the only thing that happens, full stop.
 
+**Chasing that finding took three real, verified iterations, and the result is more interesting
+than a clean fix.** A situational reminder (mirroring `THREAT_WARNING`'s approach: loud, only
+appears when relevant, names the exact `action_type`/`target_id` instead of describing the
+mechanic in the abstract) got contribution happening for the first time — but a follow-up batch
+showed the first version firing on *any* nonzero stock made survival worse, not better: contributed
+went 0 → 35, but total gathered collapsed 784 → 92 and economy-scenario trials reaching the tick
+budget dropped from 4/6 to 0/6 — nagging a colonist over a single held unit interrupted the early
+gathering that used to build a real stockpile. Gating the reminder on a real threshold (5, summed
+across resource types) fixed that specific regression — contributed rose again to 80, gathered
+recovered to 137, both real improvements over the un-thresholded version — but survival still
+didn't move (still 0/6, same average tick count). The amounts involved, single digits to low
+dozens per trial, are trivial against what a 5-colonist crew actually burns (~5 food/tick in
+upkeep alone, 300+ over a full trial). Getting agents to share was never going to fix survival by
+itself at the current resource yields — the bottleneck isn't willingness anymore, it's throughput.
+Both real conflicts along the way were caught by reading raw event-log output, not aggregate
+stats: colonists at `colony_core` holding nothing still sometimes attempted
+`contribute_resources` (`"Karl has nothing personal to contribute"`, a wasted turn, pre-existing
+and unrelated to the reminder logic), and — a real correctness bug, not just a tuning miss — with
+both `THREAT_WARNING` and the contribution reminder present, a colonist under active attack chose
+to contribute instead of fight or flee 3/3 times before the reminder was made to stand down
+whenever a threat is active.
+
 - [x] **Phase 1:** Core FastAPI tick loop with mock cognition and a full colony/combat/exploration action model.
 - [x] **Phase 2:** Ollama integration with strict Pydantic-validated JSON output (schema-constrained, with a safe fallback if a local model hallucinates).
 - [x] **Phase 3:** Persistent episodic memory — agents recall past events, standing reads on crew/sectors, and unresolved contradictions via a [Palimpsest](https://github.com/ScottColeSW/Palimpsest) mesh per colonist.
