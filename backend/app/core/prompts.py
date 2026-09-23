@@ -44,6 +44,7 @@ CURRENT ENVIRONMENT DATA:
   starves right alongside each other when that happens. Hoarding protects you personally at the
   colony's expense; sharing helps everyone including you, but leaves you with nothing held back
   for yourself if it runs out.)
+{contribution_reminder}
 
 Sectors connect through colony_core, not directly to each other — from colony_core you can
 reach anywhere in one move, but going from one outlying sector straight to another takes two
@@ -112,19 +113,105 @@ out, not a substitute for actually fighting or fleeing. Choose fire_weapon or re
 """.strip()
 
 
-def build_prompt(*, is_captain: bool = False, loyalty: int = 7, nearby_aliens: str = "none", **kwargs) -> str:
+# A real 9-trial batch (see README) found resources_contributed_total was 0 across all 45
+# agent-runs -- not occasional hoarding, but every single colonist that ever gathered anything
+# keeping it in personal stock for the whole trial, even metal and energy that have zero personal
+# benefit (only food has a deliberate hoarding upside -- see the stockpile paragraph above). The
+# general mechanic explanation above was apparently too easy to read once and never act on again;
+# this mirrors the exact fix that worked for combat (THREAT_WARNING) -- a loud, situational,
+# impossible-to-skim block that only appears when it's actually relevant, naming the concrete
+# amounts held right now instead of describing the mechanic in the abstract.
+def _contribution_reminder(
+    current_sector: str,
+    personal_metal: int,
+    personal_food: int,
+    personal_energy: int,
+    personal_biomatter: int,
+    nearby_aliens: str,
+) -> str:
+    if nearby_aliens != "none":
+        # A real check turned up exactly the failure this guards against: with both
+        # blocks present, THREAT_WARNING's "overrides every other goal" was not
+        # actually respected -- 3/3 real calls chose contribute_resources while under
+        # active attack instead of fire_weapon/retreat. Rather than trust prompt
+        # wording to arbitrate between two loud imperatives, just don't emit this one
+        # when there's a live threat -- colony_core (where contributing happens) is
+        # alien-free in every seeded scenario, so this only matters for edge cases,
+        # but combat survival has to win that edge case, not lose it.
+        return ""
+    held = [
+        f"{name}={amount}"
+        for name, amount in (
+            ("metal", personal_metal),
+            ("food", personal_food),
+            ("energy", personal_energy),
+            ("biomatter", personal_biomatter),
+        )
+        if amount > 0
+    ]
+    if not held:
+        return ""
+    held_str = ", ".join(held)
+    if current_sector == "colony_core":
+        return (
+            "REMINDER: You are at colony_core RIGHT NOW, holding "
+            f"{held_str} in your personal stock. Your action_type this turn should be "
+            '"contribute_resources" (target_id null hands over everything, or use '
+            '"resource:amount" to give part of it). Nothing else available to you this turn — '
+            "gathering more, exploring, resting, building — helps the colony as directly as this "
+            "one action does, and it only takes one turn. Do it now, while you're already here."
+        )
+    non_food_held = personal_metal or personal_energy or personal_biomatter
+    no_upside = (
+        "Metal, energy, and biomatter do nothing for you personally held onto — there's no real "
+        "reason to keep those specifically; only food has a genuine personal upside (see above). "
+        if non_food_held
+        else ""
+    )
+    return (
+        f"NOTE: You're holding {held_str} at {current_sector}, far from colony_core, and it "
+        "helps no one — not the colony's food or energy upkeep, not its ability to build or "
+        'repair — sitting out here. Your action_type this turn should be "explore_sector" with '
+        'target_id "colony_core" to start heading back; once you arrive, contribute it. '
+        f"{no_upside}Don't keep gathering more of what you're already sitting on instead of "
+        "bringing it in."
+    )
+
+
+def build_prompt(
+    *,
+    is_captain: bool = False,
+    loyalty: int = 7,
+    nearby_aliens: str = "none",
+    current_sector: str,
+    personal_metal: int,
+    personal_food: int,
+    personal_energy: int,
+    personal_biomatter: int,
+    **kwargs,
+) -> str:
     """Fill BASE_COGNITIVE_PROMPT, auto-injecting the valid action list, chain of command, and
-    (when actually under threat) the explicit combat warning above."""
+    (when actually relevant) the explicit combat and contribution nudges above."""
     chain_of_command = (
         CAPTAIN_CHAIN_OF_COMMAND
         if is_captain
         else CREW_CHAIN_OF_COMMAND_TEMPLATE.format(loyalty=loyalty)
     )
     threat_warning = THREAT_WARNING if nearby_aliens != "none" else ""
+    contribution_reminder = _contribution_reminder(
+        current_sector, personal_metal, personal_food, personal_energy, personal_biomatter,
+        nearby_aliens,
+    )
     return BASE_COGNITIVE_PROMPT.format(
         valid_actions=VALID_ACTIONS,
         chain_of_command=chain_of_command,
         nearby_aliens=nearby_aliens,
         threat_warning=threat_warning,
+        current_sector=current_sector,
+        personal_metal=personal_metal,
+        personal_food=personal_food,
+        personal_energy=personal_energy,
+        personal_biomatter=personal_biomatter,
+        contribution_reminder=contribution_reminder,
         **kwargs,
     )
