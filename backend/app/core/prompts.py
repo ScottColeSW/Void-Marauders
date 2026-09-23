@@ -27,6 +27,7 @@ CURRENT ENVIRONMENT DATA:
   Food and energy drain every tick. Food at zero starves the crew. Energy at zero decays
   completed structures and can destroy them. Metal is spent building; biomatter is spent
   repairing. Biomatter only comes from alien_nest — the sector the aliens live in.
+{crew_status_note}
 - Your Personal Stock (yours alone): metal={personal_metal}, food={personal_food},
   energy={personal_energy}, biomatter={personal_biomatter}
   "gather_resource" fills this, not the colony stockpile — it helps no one until you use
@@ -69,10 +70,10 @@ than from a routine order. Reckless orders that keep backfiring will cost you yo
 """.strip()
 
 CREW_CHAIN_OF_COMMAND_TEMPLATE = """
-Valerie is the Captain. You cannot issue_order. Your loyalty to her is {loyalty}/10 — higher
-means more inclined to comply, lower means more likely to act on your own judgement instead. If
-her order sends you somewhere aliens already are, refusing costs you little; complying is a real
-gamble on your life, not routine duty.
+{captain_name} is the Captain. You cannot issue_order. Your loyalty to them is {loyalty}/10 —
+higher means more inclined to comply, lower means more likely to act on your own judgement
+instead. If their order sends you somewhere aliens already are, refusing costs you little;
+complying is a real gamble on your life, not routine duty.
 """.strip()
 
 # Real trials exposed why colonists never fought back: "Nearby Alien Threats: alien_a1b2c3" is
@@ -163,40 +164,87 @@ def _contribution_reminder(
     )
 
 
+# The crew are cybernetic units, not biological -- a lost colonist doesn't need rescue, just
+# materials and power to rebuild (see engine.py's CREW_UNIT_METAL_COST/CREW_UNIT_ENERGY_COST and
+# _resolve_build_crew_unit). Mentioned only when a slot is actually empty, same reasoning as the
+# contribution reminder: an action nobody knows to look for doesn't get chosen, and one mentioned
+# when it doesn't apply just gets attempted anyway (real trials showed colonists attempting
+# contribute_resources while holding nothing, logged as "has nothing personal to contribute" --
+# not caused by the reminder, which never fires for them, but a sign that a prominently-described
+# action gets tried speculatively; naming build_crew_unit only when there's a real vacancy avoids
+# repeating that).
+#
+# A first version said "worth doing once the stockpile can cover it" without numbers -- a real
+# check showed a colonist at colony_core with metal=40, energy=25 (double the real cost) still
+# choosing to gather more instead of building, reasoning in its own monologue that it "needs to
+# gather some metal and energy" despite already having enough. Same lesson as THREAT_WARNING and
+# the contribution reminder: a vague qualifier lets the model hedge; a number it can directly
+# compare against the stockpile line already shown above does not.
+CREW_UNIT_METAL_COST = 20  # must track engine.py's CREW_UNIT_METAL_COST
+CREW_UNIT_ENERGY_COST = 10  # must track engine.py's CREW_UNIT_ENERGY_COST
+
+
+def _crew_status_note(vacant_count: int, nearby_aliens: str, metal: int, energy: int) -> str:
+    if vacant_count <= 0 or nearby_aliens != "none":
+        return ""
+    plural = "s" if vacant_count > 1 else ""
+    if metal >= CREW_UNIT_METAL_COST and energy >= CREW_UNIT_ENERGY_COST:
+        return (
+            f"REMINDER: {vacant_count} crew slot{plural} empty. You have metal={metal}, "
+            f"energy={energy} — enough to cover a replacement (needs "
+            f"metal>={CREW_UNIT_METAL_COST}, energy>={CREW_UNIT_ENERGY_COST}). If you're at "
+            'colony_core, your action_type this turn should be "build_crew_unit". Do it now '
+            "instead of gathering more first."
+        )
+    return (
+        f"NOTE: {vacant_count} crew slot{plural} empty. A replacement needs "
+        f"metal>={CREW_UNIT_METAL_COST} and energy>={CREW_UNIT_ENERGY_COST} at colony_core "
+        f"(currently metal={metal}, energy={energy}) — worth building toward."
+    )
+
+
 def build_prompt(
     *,
     is_captain: bool = False,
     loyalty: int = 7,
     nearby_aliens: str = "none",
     current_sector: str,
+    metal: int,
+    energy: int,
     personal_metal: int,
     personal_food: int,
     personal_energy: int,
     personal_biomatter: int,
+    captain_name: str,
+    crew_vacancies: int = 0,
     **kwargs,
 ) -> str:
     """Fill BASE_COGNITIVE_PROMPT, auto-injecting the valid action list, chain of command, and
-    (when actually relevant) the explicit combat and contribution nudges above."""
+    (when actually relevant) the explicit combat, contribution, and crew-rebuild nudges above."""
     chain_of_command = (
         CAPTAIN_CHAIN_OF_COMMAND
         if is_captain
-        else CREW_CHAIN_OF_COMMAND_TEMPLATE.format(loyalty=loyalty)
+        else CREW_CHAIN_OF_COMMAND_TEMPLATE.format(loyalty=loyalty, captain_name=captain_name)
     )
     threat_warning = THREAT_WARNING if nearby_aliens != "none" else ""
     contribution_reminder = _contribution_reminder(
         current_sector, personal_metal, personal_food, personal_energy, personal_biomatter,
         nearby_aliens,
     )
+    crew_status_note = _crew_status_note(crew_vacancies, nearby_aliens, metal, energy)
     return BASE_COGNITIVE_PROMPT.format(
         valid_actions=VALID_ACTIONS,
         chain_of_command=chain_of_command,
         nearby_aliens=nearby_aliens,
         threat_warning=threat_warning,
         current_sector=current_sector,
+        metal=metal,
+        energy=energy,
         personal_metal=personal_metal,
         personal_food=personal_food,
         personal_energy=personal_energy,
         personal_biomatter=personal_biomatter,
         contribution_reminder=contribution_reminder,
+        crew_status_note=crew_status_note,
         **kwargs,
     )

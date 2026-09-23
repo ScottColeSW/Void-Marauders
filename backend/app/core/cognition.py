@@ -147,6 +147,23 @@ def _mock_decide(
             target_id=None,
         )
 
+    if (
+        sector.sector_type == SectorType.COLONY_CORE
+        and perception.crew_vacancies > 0
+        # Mirrors engine.py's CREW_UNIT_METAL_COST/CREW_UNIT_ENERGY_COST informally --
+        # an exact match isn't required here, since the engine itself refuses
+        # gracefully (and logs why) if the mock brain guesses wrong, same as it
+        # already does for BUILD_STRUCTURE below.
+        and perception.colony_status.metal >= 20
+        and perception.colony_status.energy >= 10
+    ):
+        return AgentActionSchema(
+            inner_monologue=f"{name} decides a fallen crewmate's slot needs filling.",
+            spoken_dialogue="Time to build a replacement.",
+            action_type=ActionType.BUILD_CREW_UNIT,
+            target_id=None,
+        )
+
     if sector.sector_type == SectorType.COLONY_CORE and perception.colony_status.metal >= 15:
         return AgentActionSchema(
             inner_monologue=f"{name} thinks the colony could use another structure.",
@@ -185,6 +202,8 @@ def _llm_decide(agent: AgentState, perception: AgentPerception) -> AgentActionSc
         personal_food=perception.personal_stock.food,
         personal_energy=perception.personal_stock.energy,
         personal_biomatter=perception.personal_stock.biomatter,
+        captain_name=perception.captain_name,
+        crew_vacancies=perception.crew_vacancies,
         retrieved_memories="\n".join(perception.retrieved_memories) or "None yet.",
     )
 

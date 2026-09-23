@@ -52,7 +52,15 @@ def create_initial_world() -> Tuple[WorldState, Dict[str, AgentState]]:
             sector_id="resource_field_south",
             sector_type=SectorType.RESOURCE_FIELD,
             explored=True,
-            resource_yield={ResourceType.FOOD: 6},
+            # Doubled from 6 -- food is the one resource with an unconditional,
+            # always-on drain (FOOD_UPKEEP_PER_TICK never stops, unlike energy's
+            # upkeep which only applies once structures exist). Real batches
+            # showed the shared food pool hit zero and then never recovered even
+            # after contribution itself started working (see engine.py,
+            # prompts.py) -- the amounts landing per trip back were too small to
+            # matter. A richer yield here means a single successful gather-and-
+            # contribute cycle buys a real buffer instead of a token one.
+            resource_yield={ResourceType.FOOD: 12},
         ),
         "geothermal_vent": Sector(
             sector_id="geothermal_vent",

@@ -11,6 +11,7 @@ from app.schemas.agent import (
     AgentPerception,
     AgentState,
     PendingOrder,
+    PersonalStock,
 )
 from app.schemas.world import AlienEntity, ColonyStatus, SectorType, StructureEntity, WorldState
 
@@ -46,6 +47,19 @@ FOOD_UPKEEP_PER_TICK = 1
 STARVATION_DAMAGE = 5
 ENERGY_UPKEEP_PER_STRUCTURE = 1
 STRUCTURE_DECAY_HP = 5
+
+# Losing a colonist used to be permanent -- once dead, always dead, with no
+# lever left to pull. The crew are cybernetic units (Karl's role is literally
+# "Cybernetic Engineer"), not biological, so recovery doesn't need a rescue
+# or a new-arrival narrative: a colonist with the materials and power to
+# spare can manufacture a replacement chassis for a fallen slot. This also
+# gives metal and energy a real ongoing sink -- both currently go idle once
+# the first few structures are built (metal has no use after the 3rd, energy
+# only drains for upkeep), while food, the scarce one, stays untouched by
+# this on purpose so crew-building can't compete with feeding the living for
+# the same resource. See _resolve_build_crew_unit.
+CREW_UNIT_METAL_COST = 20
+CREW_UNIT_ENERGY_COST = 10
 
 # Loyalty used to move the same +1/-1 on every order regardless of what the
 # order actually was or how it turned out -- a captain who orders someone
@@ -410,6 +424,12 @@ class WorldEngine:
             and other.health > 0
         ]
         nearby_aliens = self._aliens_in_sector(agent.current_sector)
+        # world_seed.py always seeds exactly one is_captain=True agent, and
+        # build_crew_unit only ever renames a slot, never removes it -- the
+        # captain slot always exists among self.agents even while dead and
+        # unreplaced, so this is never empty.
+        captain_name = next(a.profile.name for a in self.agents.values() if a.profile.is_captain)
+        crew_vacancies = sum(1 for a in self.agents.values() if a.health <= 0)
         return AgentPerception(
             agent_id=agent.profile.agent_id,
             current_sector=agent.current_sector,
@@ -418,6 +438,8 @@ class WorldEngine:
             colony_status=self.world.colony_resources,
             personal_stock=agent.personal_stock,
             stress_level=agent.stress_level,
+            captain_name=captain_name,
+            crew_vacancies=crew_vacancies,
             retrieved_memories=memory.recall(
                 self._memory_id(agent.profile.agent_id),
                 current_sector=agent.current_sector,
@@ -461,6 +483,9 @@ class WorldEngine:
 
         elif action.action_type == ActionType.CONTRIBUTE_RESOURCES:
             self._resolve_contribute(agent, action.target_id)
+
+        elif action.action_type == ActionType.BUILD_CREW_UNIT:
+            self._resolve_build_crew_unit(agent)
 
         elif action.action_type == ActionType.EXPLORE_SECTOR:
             self._resolve_explore(agent, action)
@@ -642,6 +667,43 @@ class WorldEngine:
         except ValueError:
             return None
         return (resource, amount) if amount > 0 else None
+
+    def _resolve_build_crew_unit(self, agent: AgentState) -> None:
+        # Same colony_core requirement as contributing -- manufacturing a
+        # replacement chassis happens at the colony's own facility, not
+        # wherever the requesting colonist happens to be standing.
+        if agent.current_sector != "colony_core":
+            self._log(
+                f"{agent.profile.name} would need to be at colony_core to build a crew unit."
+            )
+            return
+        vacant = next((a for a in self.agents.values() if a.health <= 0), None)
+        if vacant is None:
+            self._log(f"{agent.profile.name} checks the roster — no vacancy to fill right now.")
+            return
+        resources = self.world.colony_resources
+        if resources.metal < CREW_UNIT_METAL_COST or resources.energy < CREW_UNIT_ENERGY_COST:
+            self._log(
+                f"{agent.profile.name} wants to build a replacement for {vacant.profile.name} "
+                "but there isn't enough metal and energy on hand."
+            )
+            return
+        resources.metal -= CREW_UNIT_METAL_COST
+        resources.energy -= CREW_UNIT_ENERGY_COST
+        old_name = vacant.profile.name
+        vacant.generation += 1
+        vacant.profile.name = f"{vacant.profile.role} Unit {vacant.generation}"
+        vacant.health = 100
+        vacant.stress_level = 0
+        vacant.current_sector = "colony_core"
+        vacant.personal_stock = PersonalStock()
+        vacant.loyalty = 7
+        vacant.pending_order = None
+        vacant.taking_cover = False
+        self._log(
+            f"{agent.profile.name} manufactures a new chassis at colony_core: "
+            f"{vacant.profile.name} rolls online, filling the vacancy {old_name} left behind."
+        )
 
     def _resolve_build(self, agent: AgentState, action: AgentActionSchema) -> None:
         resources = self.world.colony_resources

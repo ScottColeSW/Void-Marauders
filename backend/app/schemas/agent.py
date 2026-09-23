@@ -13,6 +13,7 @@ class ActionType(str, Enum):
     BUILD_STRUCTURE = "build_structure"
     GATHER_RESOURCE = "gather_resource"
     CONTRIBUTE_RESOURCES = "contribute_resources"
+    BUILD_CREW_UNIT = "build_crew_unit"
     EXPLORE_SECTOR = "explore_sector"
     RETURN_TO_COLONY = "return_to_colony"
     FIRE_WEAPON = "fire_weapon"
@@ -100,6 +101,12 @@ class AgentState(BaseModel):
     # (cleared) by that next attack phase whether or not an alien actually
     # attacked this colonist. See engine.py's TAKE_COVER handling.
     taking_cover: bool = False
+    # How many times this agent_id "slot" has been (re)built. Starts at 1 for
+    # the original crew; build_crew_unit increments it and renames the unit
+    # rather than removing/re-adding an agent_id, so stats, memory keys, and
+    # the fixed 5-slot roster everything else assumes stay untouched. See
+    # engine.py's _resolve_build_crew_unit.
+    generation: int = 1
 
 
 class AgentPerception(BaseModel):
@@ -112,6 +119,8 @@ class AgentPerception(BaseModel):
     colony_status: ColonyResources
     personal_stock: PersonalStock
     stress_level: int
+    captain_name: str
+    crew_vacancies: int = 0
     retrieved_memories: List[str] = Field(default_factory=list)
 
 

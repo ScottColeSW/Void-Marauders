@@ -220,10 +220,14 @@ budget dropped from 4/6 to 0/6 — nagging a colonist over a single held unit in
 gathering that used to build a real stockpile. Gating the reminder on a real threshold (5, summed
 across resource types) fixed that specific regression — contributed rose again to 80, gathered
 recovered to 137, both real improvements over the un-thresholded version — but survival still
-didn't move (still 0/6, same average tick count). The amounts involved, single digits to low
-dozens per trial, are trivial against what a 5-colonist crew actually burns (~5 food/tick in
-upkeep alone, 300+ over a full trial). Getting agents to share was never going to fix survival by
-itself at the current resource yields — the bottleneck isn't willingness anymore, it's throughput.
+didn't move (still 0/6, same average tick count). `FOOD_UPKEEP_PER_TICK` is a flat 1/tick
+regardless of crew size, not per-colonist — checked directly in `engine.py` after an earlier draft
+of this section stated it wrong. The real trajectory (`trial_ticks` table): shared food drains
+steadily from ~40 to 0 by tick ~40-46 and then never recovers for the rest of the trial in any of
+the three baseline trials checked, plateauing at exactly 0 regardless of how many more ticks run.
+Getting agents to share was never going to fix survival by itself — the amounts that do land are
+too small and too rare to ever pull the pool back up once it's flat, and the bottleneck isn't the
+drain rate, it's that recovery basically never happens once the pool bottoms out.
 Both real conflicts along the way were caught by reading raw event-log output, not aggregate
 stats: colonists at `colony_core` holding nothing still sometimes attempted
 `contribute_resources` (`"Karl has nothing personal to contribute"`, a wasted turn, pre-existing
@@ -231,6 +235,26 @@ and unrelated to the reminder logic), and — a real correctness bug, not just a
 both `THREAT_WARNING` and the contribution reminder present, a colonist under active attack chose
 to contribute instead of fight or flee 3/3 times before the reminder was made to stand down
 whenever a threat is active.
+
+**Richer food and a real recovery lever.** Two follow-ups address the actual bottleneck the batch
+above surfaced. `resource_field_south`'s food yield doubled (6 → 12 expected) so a single
+successful gather-and-contribute cycle buys a real buffer instead of a token one. More
+structurally: the crew are cybernetic units, not biological (Karl's own role is literally
+"Cybernetic Engineer") — a lost colonist doesn't need rescue, just materials and power to rebuild.
+A new `build_crew_unit` action, at colony_core, spends `metal=20, energy=10` from the shared pool
+to refill any empty slot (same `agent_id`, reset health/sector/stock/loyalty, renamed
+`"{role} Unit {generation}"`). This also gives metal and energy their first real *ongoing* sink —
+both currently go idle once the first few structures are built, since metal has nothing left to
+buy after the 3rd and energy only drains for upkeep. Food deliberately stays untouched by this so
+crew-building can't compete with feeding the living for the same resource. Verified directly
+(insufficient-resources refusal, no-vacancy refusal, exact cost deduction, full state reset on
+success) and with real model calls — compliance is real but modest for this specific action (best
+observed: 1/4 in isolated single-tick samples, even with concrete numbers the colonist could
+compare against its own stockpile line), consistent with the pattern seen all session: a brand-new,
+less-reinforced action type gets picked less reliably than an established one, even when the
+prompt states the exact threshold. Unlike the isolated samples, the reminder persists every tick a
+vacancy exists, so a real multi-tick trial gets many chances at it, not one — worth checking against
+a real batch rather than trusting the single-tick number alone.
 
 - [x] **Phase 1:** Core FastAPI tick loop with mock cognition and a full colony/combat/exploration action model.
 - [x] **Phase 2:** Ollama integration with strict Pydantic-validated JSON output (schema-constrained, with a safe fallback if a local model hallucinates).
