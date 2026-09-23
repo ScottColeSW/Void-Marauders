@@ -193,9 +193,22 @@ memory help": run the same scenario with `--memory on` and `--memory off` and co
 chart report renders this scoped per-scenario, since different scenario categories use
 incompatible scoring formulas and shouldn't be pooled together.
 
----
-
-## 🗺 Development Roadmap
+**A real 9-trial batch (3 scenarios × 3 trials, default two-model roster, memory off) surfaced
+something the earlier 1-2 spot-check trials never caught: `contribute_resources` was never chosen
+— not once, across all 45 agent-runs.** Every colonist that gathered anything (some gathered
+100+ units) kept it in personal stock for the entire trial. In `baseline` and `resource_scarcity`
+this is fatal, not just suboptimal: the shared food pool always hits zero by tick ~10-15, and from
+then on every colonist without a food-yielding sector as their own starting position starves to
+death at 5 hp/tick with nothing anyone does about it (reliability was 100% — models were producing
+valid decisions every tick, just never the one that would've helped). Only the one colonist
+permanently stationed on a food tile survives, by accident of starting position, not by choosing
+to share. Both economy scenarios scored 7-10/100 as a result; `swarm_pressure` (short, combat-
+focused, no economy pressure) scored 37/100 in the same batch, so this isn't models failing
+generally — it's specifically the "walk back to colony_core and contribute" plan that a 2-3B local
+model reliably fails to execute even when the prompt spells out the exact mechanism and the
+starvation stakes. Worth knowing before reading the hoard-vs-share mechanic (above) as a balanced
+tension: under real local-model play so far, hoarding isn't a rational strategic choice models are
+weighing against sharing — it's closer to the only thing that happens, full stop.
 
 - [x] **Phase 1:** Core FastAPI tick loop with mock cognition and a full colony/combat/exploration action model.
 - [x] **Phase 2:** Ollama integration with strict Pydantic-validated JSON output (schema-constrained, with a safe fallback if a local model hallucinates).
