@@ -120,6 +120,24 @@ uvicorn app.main:app --reload
 
 Open **http://127.0.0.1:8000/** as before. Agent monologue/dialogue is now real LLM output, and agents recall relevant past events — plus their standing reads on crewmates and sectors, including any unresolved contradictions — each tick.
 
+**Optional: judged trust memory (`MEMORY_JUDGE=nli`).** By default a colonist's crew-trust and threat observations are filed by
+token overlap, which cannot see meaning: "ignored Captain Vance's order" shares most of its words with "complied with Captain
+Vance's order", so it was counted as *confirming* the colonist's read of the captain instead of contradicting it. With
+`MEMORY_JUDGE=nli` those observations are judged by a pretrained natural-language-inference model: a contradiction opens a
+collision with its reason, a restatement reinforces, and an observation about a different thing is left alone. It runs on
+**CPU only** (no language model, no GPU, nothing added to Ollama's load), at about 0.4 s per observation in a real game, about 22
+observations in a 20-tick scenario. The model loads in the background at startup (about 8 s) so no tick waits for it. Install
+and check it from `backend`:
+```bash
+pip install -e "../../Palimpsest[nli]"      # torch + transformers (below 5; version 5 runs this model ~12x slower)
+python -m palimpsest.nli --check            # confirms right answers at a sane speed in this environment
+python check_memory_judge.py                # the game's own check: the order-defiance case, judge off / on / broken
+```
+then set `MEMORY_JUDGE=nli` (and `MEMORY_JUDGE_THREADS=4` to taste) in `backend/.env`. If the extra is missing or anything fails,
+the game logs one line and falls back to the token-overlap rules; it never crashes a tick. Judged conflicts are recorded with
+their reasons and stay open (the judge never decides which side is right). Whether this makes the colony *do better* has not
+been measured: the only claim here is that the memory no longer files a defiance as a confirmation.
+
 > **Performance note:** with memory enabled, every agent triggers one embedding call per tick (used only to rank recent personal-log recall by relevance) on top of its cognition call — ticks take noticeably longer than in mock mode. Running five *different* models also means Ollama may not keep them all resident in memory at once on a RAM-constrained machine, which can make each tick far slower still as models reload. If it feels sluggish, either raise `TICK_INTERVAL_SECONDS` in `.env`, point more agents at the same model in `world_seed.py`, or set `MEMORY_ENABLED=false` while iterating and turn it back on for the real demo.
 
 ### Useful endpoints while it's running

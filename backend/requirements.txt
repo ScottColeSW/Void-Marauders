@@ -7,3 +7,5 @@ requests
 # palimpsest is not on PyPI -- clone https://github.com/ScottColeSW/Palimpsest.git
 # as a sibling of this repo and install it into this venv with:
 #   pip install -e ../../Palimpsest
+# optional, for MEMORY_JUDGE=nli (CPU only; keeps transformers below 5):
+#   pip install -e "../../Palimpsest[nli]"

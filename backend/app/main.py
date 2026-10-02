@@ -40,6 +40,7 @@ async def _tick_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _tick_task
+    memory.warm_up()  # load the NLI judge in the background if MEMORY_JUDGE=nli, so the first tick doesn't wait for it
     get_engine()  # seed the colony immediately so /state has data before the first tick
     _tick_task = asyncio.create_task(_tick_loop())
     yield

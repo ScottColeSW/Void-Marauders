@@ -58,6 +58,12 @@ if TYPE_CHECKING:
     from palimpsest.models import Edge, Node
 
 MEMORY_ENABLED = os.getenv("MEMORY_ENABLED", "true").lower() == "true"
+# "nli" judges crew-trust and threat observations with a pretrained NLI model (CPU only, no language model, no GPU),
+# so "ignored the captain's order" is a conflict with "complied with it" instead of a restatement. Off by default:
+# it needs `pip install -e "../../Palimpsest[nli]"` and falls back to the token-overlap rules if that's missing.
+MEMORY_JUDGE = os.getenv("MEMORY_JUDGE", "off").lower()
+MEMORY_JUDGE_THREADS = int(os.getenv("MEMORY_JUDGE_THREADS", "4"))  # CPU threads for the judge; the rest stay for Ollama
+JUDGE_NEIGHBORS = 6  # how many of a colonist's recent observations about one subject each new one is compared with
 MEMORY_DIR = Path(os.getenv("MEMORY_DIR", str(Path(__file__).resolve().parents[1] / "data" / "memory")))
 DECAY_HALF_LIFE_SECONDS = float(os.getenv("MEMORY_DECAY_HALF_LIFE_SECONDS", str(6 * 3600)))
 DECAY_FLOOR = 0.1
@@ -277,7 +283,7 @@ def record_action(
             domain=DOMAIN_THREAT_ASSESSMENT, referent=current_sector, scope=Scope.INSTANCE,
             origin=Origin.EPISODE, weight=0.6,
         )
-        apply_consult(store, threat_node, consult(store, threat_node))
+        _apply_observation(store, threat_node, agent_id)
 
     trust_observation = _crew_trust_observation(action, crew_names)
     if trust_observation:
@@ -286,7 +292,7 @@ def record_action(
             id=f"{agent_id}-trust-{uuid.uuid4().hex[:8]}", text=trust_text, domain=DOMAIN_CREW_TRUST,
             referent=trust_referent, scope=Scope.GENERAL, origin=Origin.EPISODE, weight=0.6,
         )
-        apply_consult(store, trust_node, consult(store, trust_node))
+        _apply_observation(store, trust_node, agent_id)
 
 
 def record_order_outcome(agent_id: str, captain_id: str, captain_name: str, complied: bool) -> None:
@@ -303,6 +309,86 @@ def record_order_outcome(agent_id: str, captain_id: str, captain_name: str, comp
         domain=DOMAIN_CREW_TRUST, referent=captain_id, scope=Scope.GENERAL,
         origin=Origin.EPISODE, weight=0.6,
     )
+    _apply_observation(store, node, agent_id)
+
+
+# -- judged observations (opt-in) ------------------------------------------
+
+_judge = None
+_judge_unavailable = False
+JUDGE_STATS = {"judged": 0, "fallback": 0, "seconds": 0.0, "relations": {}}
+
+
+def _get_judge():
+    """Palimpsest's no-refiner hybrid judge, built once; None when disabled or unavailable (the caller then uses the rules)."""
+    global _judge, _judge_unavailable
+    if MEMORY_JUDGE != "nli" or _judge_unavailable:
+        return None
+    if _judge is None:
+        try:
+            import torch
+
+            torch.set_num_threads(max(1, MEMORY_JUDGE_THREADS))
+            from palimpsest.judge import hybrid_judge
+            from palimpsest.nli import NLI
+
+            _judge = hybrid_judge(NLI(), None, None)  # no embedder (neighbors share a subject by construction), no refiner (conflicts stay open)
+        except Exception as exc:  # torch/transformers not installed, model missing, ...
+            _judge_unavailable = True
+            print(f"[memory] MEMORY_JUDGE=nli unavailable ({type(exc).__name__}: {exc}); using the token-overlap rules", flush=True)
+            return None
+    return _judge
+
+
+def warm_up(blocking: bool = False) -> None:
+    """Load the judge before the first observation needs it (about 8 s the first time), so no tick pays for it. Does nothing unless
+    MEMORY_ENABLED and MEMORY_JUDGE=nli. Runs in a background thread unless blocking=True (the benchmark harness blocks, so a trial's
+    timings never include the load)."""
+    if not (MEMORY_ENABLED and MEMORY_JUDGE == "nli"):
+        return
+    if blocking:
+        _get_judge()
+        return
+    import threading
+
+    threading.Thread(target=_get_judge, name="memory-judge-warmup", daemon=True).start()
+
+
+def _apply_observation(store: "InMemoryStore", node: "Node", agent_id: str) -> None:
+    """File one observation. Crew-trust and threat observations are judged by NLI when MEMORY_JUDGE=nli: the colonist's
+    recent observations about the same subject are the candidates, and the verdict (new, reinforces, coexists, collides)
+    is recorded with its reason. Anything that goes wrong falls back to the token-overlap rules, never to a crash."""
+    from palimpsest.consult import apply_consult, consult
+    from palimpsest.models import Origin
+
+    judge = _get_judge() if node.domain in (DOMAIN_CREW_TRUST, DOMAIN_THREAT_ASSESSMENT) else None
+    if judge is not None:
+        try:
+            from palimpsest import agent
+            from palimpsest.judge import normalize_verdict
+
+            near = [n for n in store.all_nodes()
+                    if n.referent == node.referent and n.domain == node.domain and n.id != node.id and n.origin != Origin.DORMANT]
+            near.sort(key=lambda n: n.last_touched, reverse=True)
+            near = near[:JUDGE_NEIGHBORS]
+            started = time.perf_counter()
+            if near:
+                verdict = normalize_verdict(
+                    judge(node.text, [{"id": n.id, "text": n.text, "similarity": 1.0} for n in near], "attribute"), {n.id for n in near})
+                relation, related_id, reason = verdict["relation"], verdict["related_id"], verdict["reason"]
+            else:
+                relation, related_id, reason = "new", None, "first observation of this"
+            agent.commit(store, node, relation=relation, reason=reason, related_id=related_id, by=agent_id, floor=False)
+            JUDGE_STATS["judged"] += 1
+            JUDGE_STATS["seconds"] += time.perf_counter() - started
+            JUDGE_STATS["relations"][relation] = JUDGE_STATS["relations"].get(relation, 0) + 1
+            return
+        except Exception as exc:  # noqa: BLE001 -- a judge failure must never stop a tick
+            JUDGE_STATS["fallback"] += 1
+            if JUDGE_STATS["fallback"] == 1:
+                print(f"[memory] judge failed once ({type(exc).__name__}: {exc}); using the rules for this observation", flush=True)
+            if store.get_node(node.id) is not None:   # commit got far enough to store it: nothing more to do
+                return
     apply_consult(store, node, consult(store, node))
 
 

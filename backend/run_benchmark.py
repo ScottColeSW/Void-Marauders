@@ -25,6 +25,9 @@ stay independent samples, which --report's mean/min/max relies on. This is
 also the actual way to answer "does memory help": run the same scenario
 with --memory on and --memory off and compare.
 
+MEMORY_JUDGE=nli (with --memory on) judges crew-trust and threat observations with a pretrained NLI model on CPU
+instead of token overlap; see app/core/memory.py and check_memory_judge.py.
+
 Forces COGNITION_MODE=llm regardless of .env -- this harness exists
 specifically to compare real models; mock mode has no "model" to vary.
 """
@@ -220,6 +223,16 @@ def main() -> None:
         else:
             print_report(scenario_filter, args.models)
         return
+
+    # Load the NLI judge now (MEMORY_JUDGE=nli with --memory on), so no trial's timings include the model load
+    from app.core import memory as _memory
+    _memory.warm_up(blocking=True)
+    import atexit
+
+    atexit.register(lambda: _memory.JUDGE_STATS["judged"] and print(
+        f"[memory judge] {_memory.JUDGE_STATS['judged']} observations judged on CPU in {_memory.JUDGE_STATS['seconds']:.1f}s "
+        f"({_memory.JUDGE_STATS['seconds'] / _memory.JUDGE_STATS['judged'] * 1000:.0f} ms each), "
+        f"{_memory.JUDGE_STATS['fallback']} fell back to the rules; relations: {_memory.JUDGE_STATS['relations']}"))
 
     models = [m.strip() for m in args.models.split(",") if m.strip()] if args.models else None
     scenario_keys = list(SCENARIOS) if not args.scenario or "all" in args.scenario else args.scenario
