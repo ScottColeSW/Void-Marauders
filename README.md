@@ -135,8 +135,7 @@ python check_memory_judge.py                # the game's own check: the order-de
 ```
 then set `MEMORY_JUDGE=nli` (and `MEMORY_JUDGE_THREADS=4` to taste) in `backend/.env`. If the extra is missing or anything fails,
 the game logs one line and falls back to the token-overlap rules; it never crashes a tick. Judged conflicts are recorded with
-their reasons and stay open (the judge never decides which side is right). Whether this makes the colony *do better* has not
-been measured: the only claim here is that the memory no longer files a defiance as a confirmation.
+their reasons and stay open (the judge never decides which side is right). Whether memory makes the colony *do better* was measured once and did not show a benefit: in 12 paired `swarm_pressure` trials the memory-on mean was 36.1 against 40.0 with memory off (difference -3.9, 95% range -9.2 to +1.9; see [docs/memory-ab-swarm-pressure.md](docs/memory-ab-swarm-pressure.md)). The claim here is only that the memory no longer files a defiance as a confirmation.
 
 > **Performance note:** with memory enabled, every agent triggers one embedding call per tick (used only to rank recent personal-log recall by relevance) on top of its cognition call — ticks take noticeably longer than in mock mode. Running five *different* models also means Ollama may not keep them all resident in memory at once on a RAM-constrained machine, which can make each tick far slower still as models reload. If it feels sluggish, either raise `TICK_INTERVAL_SECONDS` in `.env`, point more agents at the same model in `world_seed.py`, or set `MEMORY_ENABLED=false` while iterating and turn it back on for the real demo.
 
