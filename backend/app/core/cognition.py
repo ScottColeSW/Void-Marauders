@@ -35,6 +35,22 @@ def warm_up(models: list) -> None:
     threading.Thread(target=_load, name="ollama-warmup", daemon=True).start()
 
 
+def unload_models(models: list) -> None:
+    """Ask Ollama to drop each model from memory now (keep_alive=0), so quitting the game gives the GPU
+    back instead of leaving the models resident for the rest of KEEP_ALIVE. Best-effort: a model that
+    is already gone, or an Ollama that is not running, is not an error on the way out."""
+    if COGNITION_MODE != "llm":
+        return
+    import ollama
+
+    client = ollama.Client(host=OLLAMA_HOST)
+    for model in models:
+        try:
+            client.generate(model=model, prompt="", keep_alive=0)
+        except Exception:
+            pass
+
+
 def decide(
     agent: AgentState, perception: AgentPerception, world: WorldState
 ) -> Tuple[AgentActionSchema, bool]:

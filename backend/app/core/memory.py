@@ -240,6 +240,18 @@ def _embed(text: str) -> Optional[List[float]]:
     return vector
 
 
+def unload_embeddings() -> None:
+    """Drop the embedding model from Ollama's memory (see cognition.unload_models)."""
+    if not MEMORY_ENABLED:
+        return
+    try:
+        import ollama
+
+        ollama.Client(host=OLLAMA_HOST).embeddings(model=EMBED_MODEL, prompt="bye", keep_alive=0)
+    except Exception:
+        pass
+
+
 def warm_up_embeddings() -> None:
     """Load the embedding model in the background so the first recall doesn't wait for it."""
     if not MEMORY_ENABLED:

@@ -114,7 +114,9 @@ venv\Scripts\activate
 python run.py
 ```
 
-Options: `--mock` (mock brain, memory off), `--port N`, `--host H`, `--no-reload`.
+Options: `--mock` (mock brain, memory off), `--port N`, `--host H`, `--reload` (auto-reload on code changes, development only).
+
+**Start and Quit.** The server builds the colony and loads the models, then waits: nothing happens until you press **START** on the dashboard. **QUIT** (header, on both the dashboard and the summary page) is a clean shutdown: it lets the current tick finish, saves every colonist's memory, unloads the models from Ollama (so your GPU is free again), and exits the server. Ctrl+C in the terminal does the same cleanup. After a game ends, **Run it again** on the summary page starts a fresh colony.
 
 Open **http://127.0.0.1:8000/** as before. Agent monologue/dialogue is now real LLM output, and agents recall relevant past events — plus their standing reads on crewmates and sectors, including any unresolved contradictions — each tick.
 
