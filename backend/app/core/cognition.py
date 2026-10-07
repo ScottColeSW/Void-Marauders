@@ -229,7 +229,8 @@ def _llm_decide(agent: AgentState, perception: AgentPerception, world: WorldStat
         captain_name=perception.captain_name,
         crew_vacancies=perception.crew_vacancies,
         retrieved_memories="\n".join(perception.retrieved_memories) or "None yet.",
-        sector_overview=build_sector_overview(world, perception.current_sector),
+        sector_overview=build_sector_overview(world, perception.current_sector, agent.health),
+        duty=agent.profile.duty,
         crew_roster=perception.crew_roster,
         last_result=perception.last_result or "",
     )

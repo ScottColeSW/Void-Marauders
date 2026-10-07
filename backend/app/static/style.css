@@ -111,6 +111,14 @@ h1 {
   padding: 0.6rem 0.9rem;
 }
 
+.stat-tile.danger {
+  border-color: var(--danger);
+}
+
+.stat-tile.danger .value {
+  color: var(--danger);
+}
+
 .stat-tile .label {
   color: var(--text-dim);
   font-size: 0.75rem;
@@ -247,6 +255,58 @@ main {
   fill: var(--amber);
   stroke: var(--bg);
   stroke-width: 1.5;
+}
+
+.structures-heading {
+  margin-top: 1rem;
+}
+
+.structures-heading span {
+  color: var(--amber);
+  text-transform: none;
+  letter-spacing: 0;
+  margin-left: 0.4rem;
+}
+
+.structure-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.structure-row {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.8rem;
+  font-size: 0.85rem;
+}
+
+.structure-row.building {
+  border-color: var(--amber);
+}
+
+.structure-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.structure-name {
+  color: var(--accent);
+  font-weight: bold;
+}
+
+.structure-meta {
+  color: var(--text-dim);
+}
+
+.structure-decay {
+  color: var(--danger);
+}
+
+.structure-empty {
+  color: var(--text-dim);
+  font-size: 0.85rem;
 }
 
 .bar {

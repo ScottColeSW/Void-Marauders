@@ -61,14 +61,23 @@ function renderStatusBanner(status) {
   }
 }
 
-function renderResources(resources) {
+const SWARM_KILLS_TO_COLLAPSE = 10; // must track world_seed.SWARM_KILLS_TO_COLLAPSE
+const NEST_MAX_HP = 100; // must track world_seed.NEST_MAX_HP
+
+function renderResources(resources, state) {
   const el = document.getElementById("resources");
-  el.innerHTML = Object.entries(RESOURCE_LABELS)
+  const nestValue = state.nest_destroyed ? "DESTROYED" : `${state.nest_health}/${NEST_MAX_HP}`;
+  const tiles = [
+    ...Object.entries(RESOURCE_LABELS).map(([key, label]) => [label, resources[key], ""]),
+    ["Alien Nest", nestValue, state.nest_destroyed ? "" : "danger"],
+    ["Swarm Kills", `${state.swarm_kills}/${SWARM_KILLS_TO_COLLAPSE}`, ""],
+  ];
+  el.innerHTML = tiles
     .map(
-      ([key, label]) => `
-      <div class="stat-tile">
+      ([label, value, cls]) => `
+      <div class="stat-tile ${cls}">
         <div class="label">${label}</div>
-        <div class="value">${resources[key]}</div>
+        <div class="value">${value}</div>
       </div>`
     )
     .join("");
@@ -162,6 +171,41 @@ function renderMap(sectors, agents, aliens, structures) {
   el.innerHTML = `<svg viewBox="${MAP_VIEWBOX}" class="map-svg" role="img" aria-label="Colony sector map">${links}${tiles}</svg>`;
 }
 
+const STRUCTURES_REQUIRED = 3; // must track engine.py's WIN_STRUCTURES_REQUIRED
+
+function renderStructures(structures) {
+  const list = Object.values(structures);
+  const done = list.filter((s) => s.build_progress >= 100).length;
+  document.getElementById("structures-summary").textContent = `${done}/${STRUCTURES_REQUIRED} complete`;
+  const el = document.getElementById("structures");
+  if (!list.length) {
+    el.innerHTML = `<div class="structure-empty">None started yet. Each costs 15 metal.</div>`;
+    return;
+  }
+  // Ongoing builds first (closest to done on top), finished ones after.
+  list.sort((a, b) => {
+    const aDone = a.build_progress >= 100;
+    const bDone = b.build_progress >= 100;
+    return aDone === bDone ? b.build_progress - a.build_progress : aDone - bDone;
+  });
+  el.innerHTML = list
+    .map((s) => {
+      const complete = s.build_progress >= 100;
+      const status = complete ? "complete" : `building ${s.build_progress}%`;
+      const decaying = complete && s.hp < 100;
+      const hpNote = decaying ? ` <span class="structure-decay">decaying: ${s.hp} hp</span>` : "";
+      return `
+        <div class="structure-row ${complete ? "done" : "building"}">
+          <div class="structure-head">
+            <span class="structure-name">${escapeHtml(s.structure_type)}</span>
+            <span class="structure-meta">${escapeHtml(s.sector_id)} &middot; ${status}${hpNote}</span>
+          </div>
+          <div class="bar"><div class="bar-fill ${complete ? "health" : "stress"}" style="width:${s.build_progress}%"></div></div>
+        </div>`;
+    })
+    .join("");
+}
+
 function renderColonists(agents) {
   const el = document.getElementById("colonists");
   el.innerHTML = agents
@@ -221,8 +265,9 @@ async function refresh() {
 
     document.getElementById("tick-count").textContent = state.tick;
     renderStatusBanner(state.status);
-    renderResources(state.colony_resources);
+    renderResources(state.colony_resources, state);
     renderMap(state.sectors, agents, state.aliens, state.structures);
+    renderStructures(state.structures);
 
     const nameToLastLine = {};
     for (const line of events) {

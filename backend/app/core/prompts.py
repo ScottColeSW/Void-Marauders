@@ -1,3 +1,16 @@
+import math
+
+from app.core.world_seed import (
+    ASSAULT_PARTY_MIN,
+    CARRY_CAPACITY,
+    NEST_MAX_HP,
+    NEST_SECTOR_ID,
+    NEST_SPAWN_INTERVAL,
+    PERSONAL_FOOD_RESERVE,
+    SIEGE_MIN_HEALTH,
+    SWARM_KILLS_TO_COLLAPSE,
+    WEAPON_DAMAGE,
+)
 from app.schemas.agent import ActionType
 
 VALID_ACTIONS = ", ".join(f'"{a.value}"' for a in ActionType)
@@ -10,6 +23,7 @@ YOUR IDENTITY:
 Name: {agent_name}
 Role: {agent_role}
 Core Personality Trait: {personality_trait}
+Your Duty: {duty}
 
 YOUR CONDITION:
 - Health: {health}/100
@@ -35,6 +49,9 @@ CURRENT ENVIRONMENT DATA:
   (e.g. "food:3") gives part and keeps the rest. Personal food is worth keeping: if the shared
   food stockpile hits zero, you eat from your own stash instead of starving. Everyone else
   starves together when that happens.
+  Your pack holds {carry_capacity} in total. Once it is full, gathering sends you back to
+  colony_core, and anyone standing in colony_core unloads automatically (keeping up to
+  {food_reserve} food).
 {contribution_reminder}
 
 Sectors connect through colony_core only. One move from colony_core reaches anywhere; one
@@ -218,47 +235,128 @@ WIN_STRUCTURES_REQUIRED = 3  # must track engine.py's WIN_STRUCTURES_REQUIRED
 
 
 STRUCTURE_METAL_COST = 15  # must track engine.py's STRUCTURE_METAL_COST
+FOOD_PLENTIFUL = 80  # a real run hit food=189 with metal stuck at 20 because everyone kept foraging
 
 
-def build_colony_next_steps(world) -> str:
+ENERGY_LOW = 8  # structures cost energy every tick once complete; see engine.py's _apply_energy_upkeep
+
+
+def build_colony_next_steps(world, current_sector: str = "", health: int = 100) -> str:
     """What actually stands between the colony and winning right now, from live state. Victory
-    is WIN_STRUCTURES_REQUIRED complete structures and no hostiles left (engine.py's
-    _check_end_conditions). The colonists were told that rule once, in the abstract, and
-    wandered; naming the concrete next move (with the real metal cost and structure id to
-    compare against) is the same fix that worked for combat and crew rebuilds above."""
+    is WIN_STRUCTURES_REQUIRED complete structures, the nest destroyed and no hostiles left
+    (engine.py's _check_end_conditions). The colonists were told that rule once, in the abstract,
+    and wandered; naming the concrete next move (with the real metal cost and structure id to
+    compare against) is the same fix that worked for combat and crew rebuilds above.
+
+    Two kinds of line: plain facts under TO WIN, and, only when the state makes one move clearly
+    right, an ACTION REQUIRED line in the same "do it now" form as the crew-rebuild reminder. A
+    real run with duties but no imperative had metal pile up to 240 while the builder kept gathering
+    and the defender never left the metal field -- small models repeat their habitual action unless
+    told exactly what this turn is for."""
     structures = list(world.structures.values())
+    resources = world.colony_resources
     steps = []
-    in_progress = [s for s in structures if s.build_progress < 100]
-    for s in in_progress:
+    required = []
+
+    for s in (s for s in structures if s.build_progress < 100):
         steps.append(
             f'{s.structure_type} {s.structure_id} is {s.build_progress}% built: build_structure with '
             f'target_id "{s.structure_id}" at {s.sector_id} speeds it up.'
         )
+    if resources.food >= FOOD_PLENTIFUL:
+        steps.append(
+            f"Food is plentiful (food={resources.food}). Gathering more food accomplishes nothing now; "
+            "metal and the nest are what the colony needs."
+        )
+    if structures and resources.energy < ENERGY_LOW:
+        steps.append(
+            f"Energy is low (energy={resources.energy}) and every finished structure drains it each "
+            "tick; at zero they decay and can be destroyed. Energy comes from geothermal_vent: "
+            "gather_resource with target_id geothermal_vent."
+        )
+
     still_to_start = WIN_STRUCTURES_REQUIRED - len(structures)
     if still_to_start > 0:
-        metal = world.colony_resources.metal
+        metal = resources.metal
         if metal >= STRUCTURE_METAL_COST:
-            steps.append(
-                f'{still_to_start} more structure(s) to start. The stockpile has metal={metal}: at '
-                'colony_core use build_structure with target_id "new:habitat".'
+            required.append(
+                f'use action_type "build_structure" with target_id "new:habitat" (works in any sector; '
+                f"{still_to_start} more structure(s) are still needed and the stockpile has metal={metal}). "
+                "Do it now instead of gathering more."
             )
         else:
             steps.append(
                 f"{still_to_start} more structure(s) to start, each costing {STRUCTURE_METAL_COST} metal, "
-                f"and the stockpile has metal={metal}. Metal comes from resource_field_north: gather it, "
-                "then contribute_resources at colony_core."
+                f"and the stockpile has metal={metal}. Metal comes from resource_field_north: gather it."
             )
+
+    if not world.nest_destroyed:
+        hits = math.ceil(world.nest_health / WEAPON_DAMAGE)
+        left = max(0, SWARM_KILLS_TO_COLLAPSE - world.swarm_kills)
+        steps.append(
+            f"The alien nest at {NEST_SECTOR_ID} ({world.nest_health}/{NEST_MAX_HP} HP) births a new "
+            f"swarmling every {NEST_SPAWN_INTERVAL} ticks until it is destroyed. Destroy it by standing in "
+            f'{NEST_SECTOR_ID} and using fire_weapon with target_id "{NEST_SECTOR_ID}" '
+            f"(about {hits} hits, once the swarmlings there are dead), or by killing {left} more "
+            f"swarmlings ({world.swarm_kills}/{SWARM_KILLS_TO_COLLAPSE} killed) to break the swarm."
+        )
+        # Building is underway (every structure is at least started), so the colony's next job is
+        # the nest -- but as one group (see world_seed.ASSAULT_PARTY_MIN), never one by one.
+        if still_to_start <= 0:
+            if health <= SIEGE_MIN_HEALTH and current_sector == "colony_core":
+                required.append(
+                    'use action_type "rest" -- you are too hurt for the assault (health '
+                    f"{health}); recover first."
+                )
+            elif health > SIEGE_MIN_HEALTH and world.assault_on:
+                if current_sector != NEST_SECTOR_ID:
+                    required.append(
+                        f'the assault is on: use action_type "explore_sector" with target_id '
+                        f'"{NEST_SECTOR_ID}". Do it now instead of gathering.'
+                    )
+                elif not any(a.sector_id == NEST_SECTOR_ID for a in world.aliens.values()):
+                    required.append(
+                        f'use action_type "fire_weapon" with target_id "{NEST_SECTOR_ID}" -- the '
+                        "swarmlings here are dead, so shoot the nest itself."
+                    )
+            elif health > SIEGE_MIN_HEALTH:
+                steps.append(
+                    f"The assault on the nest starts once {ASSAULT_PARTY_MIN} healthy crew are "
+                    "standing in colony_core together. Going in alone gets you killed."
+                )
+                required.append(
+                    'rally for the assault: use action_type "explore_sector" with target_id '
+                    '"colony_core" (or stay there). Do not wander off to gather.'
+                )
+    if (
+        world.nest_destroyed
+        and world.aliens
+        and still_to_start <= 0
+        and health > SIEGE_MIN_HEALTH
+        and current_sector != NEST_SECTOR_ID
+    ):
+        required.append(
+            f'mop up: the nest is down but {len(world.aliens)} swarmling(s) remain. Use '
+            f'action_type "explore_sector" with target_id "{NEST_SECTOR_ID}" and finish them.'
+        )
     if world.aliens:
         steps.append(
-            f"{len(world.aliens)} hostile(s) are still alive and must all be destroyed to win. They "
-            "live at alien_nest. Go in healthy (health above 60) and use fire_weapon on each."
+            f"{len(world.aliens)} hostile(s) are alive and all must be destroyed to win. In a sector "
+            "with one, use fire_weapon with its alien id as target_id."
         )
-    if not steps:
-        return ""
-    return "TO WIN, THE COLONY STILL NEEDS:\n" + "\n".join(f"- {step}" for step in steps)
+
+    parts = []
+    if required:
+        parts.append(
+            "ACTION REQUIRED THIS TURN (this overrides your duty):\n"
+            + "\n".join(f"- {r}" for r in required)
+        )
+    if steps:
+        parts.append("TO WIN, THE COLONY STILL NEEDS:\n" + "\n".join(f"- {step}" for step in steps))
+    return "\n".join(parts)
 
 
-def build_sector_overview(world, current_sector: str) -> str:
+def build_sector_overview(world, current_sector: str, health: int = 100) -> str:
     lines = ["KNOWN SECTORS (use explore_sector with the sector id as target_id to go there):"]
     for sector in world.sectors.values():
         here = " <- you are here" if sector.sector_id == current_sector else ""
@@ -280,7 +378,10 @@ def build_sector_overview(world, current_sector: str) -> str:
     progress = f"Colony progress: {done}/{WIN_STRUCTURES_REQUIRED} structures complete"
     if building:
         progress += f" (in progress: {', '.join(building)})"
-    progress += f". Victory needs {WIN_STRUCTURES_REQUIRED} complete and no hostiles left."
+    progress += (
+        f". Victory needs {WIN_STRUCTURES_REQUIRED} complete, the alien nest destroyed, and no "
+        "hostiles left."
+    )
     lines.append(progress)
     lines.append(
         '"gather_resource" collects from the sector you are standing in. Naming another sector with a '
@@ -292,7 +393,7 @@ def build_sector_overview(world, current_sector: str) -> str:
         '"gather_resource" in a sector with no yield, and "explore_sector" on the sector you are '
         "already in once it is explored. Do something that changes the colony's situation."
     )
-    next_steps = build_colony_next_steps(world)
+    next_steps = build_colony_next_steps(world, current_sector, health)
     if next_steps:
         lines.append(next_steps)
     return "\n".join(lines)
@@ -315,6 +416,7 @@ def build_prompt(
     sector_overview: str = "",
     crew_roster=(),
     last_result: str = "",
+    duty: str = "",
     **kwargs,
 ) -> str:
     """Fill BASE_COGNITIVE_PROMPT, auto-injecting the valid action list, chain of command, and
@@ -326,9 +428,10 @@ def build_prompt(
     )
     if is_captain and crew_roster:
         chain_of_command += (
-            "\nCrew you can order -- target_id must be one of these ids exactly, never a sector: "
+            "\nCrew you can order (target_id is one of these ids): "
             + "; ".join(crew_roster)
-            + "."
+            + ". To send someone somewhere instead, set target_id to a sector id: the best-placed "
+            "crewmate is sent there, and order_action says what to do on arrival."
         )
     threat_warning = THREAT_WARNING if nearby_aliens != "none" else ""
     contribution_reminder = _contribution_reminder(
@@ -351,6 +454,9 @@ def build_prompt(
         contribution_reminder=contribution_reminder,
         crew_status_note=crew_status_note,
         sector_overview=sector_overview,
+        carry_capacity=CARRY_CAPACITY,
+        food_reserve=PERSONAL_FOOD_RESERVE,
+        duty=duty or "No fixed duty: do whatever the colony needs most.",
         last_result=(
             f"LAST TURN WASTED: {last_result} Choose a different action this turn."
             if last_result

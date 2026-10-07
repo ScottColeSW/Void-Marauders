@@ -63,3 +63,10 @@ class WorldState(BaseModel):
     aliens: Dict[str, AlienEntity] = Field(default_factory=dict)
     structures: Dict[str, StructureEntity] = Field(default_factory=dict)
     event_log: List[str] = Field(default_factory=list)
+    # The alien nest births swarmlings until it is destroyed -- see world_seed.py's NEST_* constants
+    # and engine.py's _nest_step. nest_health's default must match NEST_MAX_HP.
+    nest_health: int = 100
+    nest_destroyed: bool = False
+    swarm_kills: int = 0
+    # True while the crew is out on the assault on the nest (see engine.py's _update_assault).
+    assault_on: bool = False

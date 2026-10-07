@@ -34,6 +34,33 @@ SECTOR_ADJACENCY: Dict[str, List[str]] = {
 }
 
 
+# The alien nest is what makes the swarm a standing problem instead of two sitting ducks: while it
+# stands it births a new swarmling every NEST_SPAWN_INTERVAL ticks (never more than NEST_MAX_ALIVE
+# alive at once, so the pressure is steady, not a snowball). It falls one of two ways: shoot it
+# (fire_weapon with target_id "alien_nest" while standing in that sector -- NEST_MAX_HP / WEAPON_DAMAGE
+# hits), or break the swarm by killing SWARM_KILLS_TO_COLLAPSE of them in total. Lives here, not in
+# engine.py, because prompts.py quotes the same numbers to the colonists and cannot import the engine.
+NEST_SECTOR_ID = "alien_nest"
+NEST_MAX_HP = 100
+NEST_SPAWN_INTERVAL = 6
+NEST_MAX_ALIVE = 4
+SWARM_KILLS_TO_COLLAPSE = 10
+SWARMLING_HEALTH = 25
+WEAPON_DAMAGE = 15
+
+# How much a colonist can carry in total before gathering sends them back to colony_core, and how
+# much food they keep when they unload there. See engine.py's CARRY_CAPACITY comment for why.
+CARRY_CAPACITY = 20
+
+# The assault on the nest is a group action: a real run sent two colonists in separately against four
+# swarmlings and both died inside three ticks with one kill between them. The crew rallies at
+# colony_core, and the assault only starts once ASSAULT_PARTY_MIN colonists healthier than
+# SIEGE_MIN_HEALTH are standing there together (see engine.py's _update_assault).
+ASSAULT_PARTY_MIN = 3
+SIEGE_MIN_HEALTH = 60
+PERSONAL_FOOD_RESERVE = 5
+
+
 def create_initial_world() -> Tuple[WorldState, Dict[str, AgentState]]:
     sectors = {
         "landing_ship": Sector(
@@ -65,8 +92,11 @@ def create_initial_world() -> Tuple[WorldState, Dict[str, AgentState]]:
         "geothermal_vent": Sector(
             sector_id="geothermal_vent",
             sector_type=SectorType.RESOURCE_FIELD,
-            explored=False,
-            resource_yield={ResourceType.ENERGY: 5},
+            # Explored from the start: energy is the one resource the colony always has to
+            # keep sourcing (see engine.py's _apply_energy_upkeep), and with the vent hidden the
+            # colonist assigned to it just "explored" it forever instead of gathering.
+            explored=True,
+            resource_yield={ResourceType.ENERGY: 10},
         ),
         "unexplored_east": Sector(
             sector_id="unexplored_east", sector_type=SectorType.UNEXPLORED, explored=False
@@ -119,6 +149,7 @@ def create_initial_world() -> Tuple[WorldState, Dict[str, AgentState]]:
                 personality_trait="Cynical and paranoid, secretly distrusts Valerie",
                 model="qwen2.5:3b",
                 temperature=0.5,
+                duty="BUILDER. Whenever the colony stockpile has metal of 15 or more and fewer than 3 structures exist, go to colony_core and use build_structure (target_id new:habitat to start one, or an unfinished structure's id to push it along). Otherwise gather metal at resource_field_north.",
             ),
             current_sector="colony_core",
         ),
@@ -131,6 +162,7 @@ def create_initial_world() -> Tuple[WorldState, Dict[str, AgentState]]:
                 model="qwen2.5:3b",
                 temperature=0.9,
                 is_captain=True,
+                duty="COMMANDER. Direct the crew with issue_order: send crewmates to resource_field_north for metal (gather_resource), and when the crew is healthy send them at alien_nest (fire_weapon). Name a sector id as target_id and the best-placed crewmate goes.",
             ),
             current_sector="landing_ship",
         ),
@@ -142,6 +174,7 @@ def create_initial_world() -> Tuple[WorldState, Dict[str, AgentState]]:
                 personality_trait="Calm and dutiful, prioritizes crew welfare above all",
                 model="qwen2.5:3b",
                 temperature=0.7,
+                duty="SUPPLY. Metal and energy keep the colony standing: gather metal at resource_field_north, and keep energy above 8 by gathering at geothermal_vent. Rest only if you are hurt.",
             ),
             current_sector="colony_core",
         ),
@@ -153,6 +186,7 @@ def create_initial_world() -> Tuple[WorldState, Dict[str, AgentState]]:
                 personality_trait="Vigilant and aggressive toward threats",
                 model="qwen2.5:3b",
                 temperature=0.6,
+                duty="DEFENDER. Your job is the alien nest. Go to alien_nest with health above 60 and fire_weapon on every swarmling; once none are left there, fire_weapon at the nest itself (target_id alien_nest). Fall back to colony_core to rest when hurt, then go back.",
             ),
             current_sector="colony_core",
         ),
@@ -164,6 +198,7 @@ def create_initial_world() -> Tuple[WorldState, Dict[str, AgentState]]:
                 personality_trait="Curious and optimistic, driven to explore",
                 model="gemma2:2b",
                 temperature=0.8,
+                duty="FORAGER. Keep the colony fed: gather food at resource_field_south, but only while the colony food stockpile is under 60. When food is plentiful, gather metal at resource_field_north instead. If energy is under 8, gather energy at geothermal_vent.",
             ),
             current_sector="resource_field_south",
         ),

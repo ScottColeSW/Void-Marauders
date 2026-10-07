@@ -5,7 +5,21 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from app.core import cognition, memory
-from app.core.world_seed import SECTOR_ADJACENCY, create_initial_world
+from app.core.world_seed import (
+    ASSAULT_PARTY_MIN,
+    CARRY_CAPACITY,
+    NEST_MAX_ALIVE,
+    NEST_MAX_HP,
+    NEST_SECTOR_ID,
+    NEST_SPAWN_INTERVAL,
+    PERSONAL_FOOD_RESERVE,
+    SECTOR_ADJACENCY,
+    SIEGE_MIN_HEALTH,
+    SWARM_KILLS_TO_COLLAPSE,
+    SWARMLING_HEALTH,
+    WEAPON_DAMAGE,
+    create_initial_world,
+)
 from app.schemas.agent import (
     ActionType,
     AgentActionSchema,
@@ -31,8 +45,22 @@ STRUCTURE_METAL_COST = 15
 # requires someone to go into the dangerous sector for it.
 STRUCTURE_REPAIR_BIOMATTER_COST = 5
 ALIEN_ATTACK_DAMAGE = 10
-WEAPON_DAMAGE = 15
 PASSIVE_BUILD_PROGRESS = 5
+
+# A real 10-tick run had the colony gather ~175 resources and contribute 0: every colonist kept
+# gathering into a personal stash and nobody ever walked it back, so nothing was ever built. A
+# pack that fills up forces the trip (a full pack sends its owner back to colony_core on its
+# own), and arriving at colony_core unloads it. Food keeps a small personal reserve on purpose --
+# that hedge against starvation is a deliberate mechanic (see _apply_food_upkeep), just a bounded
+# one now instead of an unlimited one.
+# (CARRY_CAPACITY and PERSONAL_FOOD_RESERVE live in world_seed.py, shared with prompts.py.)
+
+# A real run had the security officer stand in alien_nest for four ticks choosing explore_sector
+# while two creatures hit him every tick, ignoring a loud THREAT_WARNING each time. Small models
+# do not reliably act on a warning, so the engine does: if hostiles share the colonist's sector
+# and the action they chose is not a response to them, they fight (health at or above this) or
+# fall back to colony_core (below it). See _combat_reflex.
+REFLEX_FIGHT_MIN_HEALTH = 40
 EXPLORE_ALIEN_ENCOUNTER_CHANCE = 0.25
 WIN_STRUCTURES_REQUIRED = 3
 
@@ -159,11 +187,15 @@ class WorldEngine:
         completed_structures = sum(
             1 for s in self.world.structures.values() if s.build_progress >= 100
         )
-        if not self.world.aliens and completed_structures >= WIN_STRUCTURES_REQUIRED:
+        if (
+            not self.world.aliens
+            and self.world.nest_destroyed
+            and completed_structures >= WIN_STRUCTURES_REQUIRED
+        ):
             self.world.status = ColonyStatus.WON
             self._log(
-                "[system] Every hostile is cleared and the colony stands on solid "
-                f"ground — {completed_structures} structures complete. Victory."
+                "[system] The nest is destroyed, every hostile is cleared, and the colony stands "
+                f"on solid ground — {completed_structures} structures complete. Victory."
             )
 
     # -- logging -----------------------------------------------------------
@@ -232,6 +264,30 @@ class WorldEngine:
 
         self._apply_food_upkeep()
         self._apply_energy_upkeep()
+        self._nest_step()
+
+    def _nest_step(self) -> None:
+        """While the nest stands it births a swarmling every NEST_SPAWN_INTERVAL ticks, up to
+        NEST_MAX_ALIVE alive at once -- steady pressure, not a snowball. Killing swarmlings only
+        buys time; the nest itself has to fall (see _destroy_nest, _resolve_fire_weapon)."""
+        world = self.world
+        if world.nest_destroyed or world.tick == 0 or world.tick % NEST_SPAWN_INTERVAL:
+            return
+        if len(world.aliens) >= NEST_MAX_ALIVE:
+            return
+        alien_id = f"swarmling_{uuid.uuid4().hex[:6]}"
+        world.aliens[alien_id] = AlienEntity(
+            alien_id=alien_id, sector_id=NEST_SECTOR_ID, health=SWARMLING_HEALTH
+        )
+        self._log(f"The nest births a new swarmling at {NEST_SECTOR_ID}.")
+
+    def _destroy_nest(self, reason: str) -> None:
+        self.world.nest_destroyed = True
+        self.world.nest_health = 0
+        nest = self.world.sectors.get(NEST_SECTOR_ID)
+        if nest:
+            nest.threat_level = 1
+        self._log(f"[system] The alien nest is destroyed — {reason}. No more swarmlings will hatch.")
 
     def _apply_food_upkeep(self) -> None:
         living = [a for a in self.agents.values() if a.health > 0]
@@ -283,7 +339,28 @@ class WorldEngine:
 
     # -- agents (cognition) --------------------------------------------------
 
+    def _update_assault(self) -> None:
+        """Latch the group assault on the nest on and off. It starts once every structure is at least
+        started and ASSAULT_PARTY_MIN healthy colonists are standing in colony_core together, so
+        they all move out the same tick instead of trickling in to die one by one; it is called
+        off when fewer than two healthy colonists remain, or the nest is gone."""
+        world = self.world
+        healthy = [a for a in self.agents.values() if a.health > SIEGE_MIN_HEALTH]
+        built = len(world.structures) >= WIN_STRUCTURES_REQUIRED
+        if not built or (world.nest_destroyed and not world.aliens):
+            world.assault_on = False   # mop-up of the last survivors keeps it on after the nest falls
+            return
+        if not world.assault_on:
+            at_core = [a for a in healthy if a.current_sector == "colony_core"]
+            if len(at_core) >= ASSAULT_PARTY_MIN:
+                world.assault_on = True
+                self._log("[system] The crew rallies at colony_core and moves out: the assault on the nest begins.")
+        elif len(healthy) < 2:
+            world.assault_on = False
+            self._log("[system] Too few healthy crew remain: the assault is called off to regroup.")
+
     def _agent_step(self, health_at_tick_start: dict) -> None:
+        self._update_assault()
         # record_action embeds the colonist's log line (a ~0.5 s Ollama call). Doing that inline
         # put it on the critical path five times a tick; handing it to one background worker
         # lets it overlap with the next colonist's LLM call instead. One worker, not several, so
@@ -298,6 +375,9 @@ class WorldEngine:
                     continue  # complied — this tick's turn is already spent
                 perception = self._build_perception(agent)
                 action, fallback = cognition.decide(agent, perception, self.world)
+                action = self._combat_reflex(agent, action)
+                action = self._build_reflex(agent, action)
+                action = self._assault_reflex(agent, action)
                 self._record_action_stats(agent, action, fallback)
                 if action.spoken_dialogue:
                     self._log(f'{agent.profile.name}: "{action.spoken_dialogue}"')
@@ -315,6 +395,123 @@ class WorldEngine:
                 )
             for future in pending:
                 future.result()  # surface any error here, same as the inline call did
+        self._unload_at_colony_core()
+
+    def _unload_at_colony_core(self) -> None:
+        """Anyone standing in colony_core at the end of the turn hands over what they carry,
+        keeping up to PERSONAL_FOOD_RESERVE food. Hoarding used to be total (see CARRY_CAPACITY)."""
+        for agent in self.agents.values():
+            if agent.health <= 0 or agent.current_sector != "colony_core":
+                continue
+            stock = agent.personal_stock
+            handed = []
+            for field in ("metal", "food", "energy", "biomatter"):
+                held = getattr(stock, field)
+                amount = held - PERSONAL_FOOD_RESERVE if field == "food" else held
+                if amount <= 0:
+                    continue
+                setattr(self.world.colony_resources, field, getattr(self.world.colony_resources, field) + amount)
+                setattr(stock, field, held - amount)
+                agent.stats.resources_contributed_total += amount
+                handed.append(f"{field}+{amount}")
+            if handed:
+                self._log(f"{agent.profile.name} unloads {', '.join(handed)} at colony_core.")
+
+    def _build_reflex(self, agent: AgentState, action: AgentActionSchema) -> AgentActionSchema:
+        """A turn that would be wasted at the base becomes a build when the colony can afford one.
+        A live run sat at metal=45 with one structure for ten ticks: the security officer idled at
+        colony_core nine times and the captain kept issuing gather orders that used up the
+        builder's turns, all while the prompt said to build. Only wasted turns are converted
+        (idle, a dead action, an order or a confrontation at the base), so nobody who is actually
+        doing something useful is overridden."""
+        world = self.world
+        if (
+            len(world.structures) >= WIN_STRUCTURES_REQUIRED
+            or world.colony_resources.metal < STRUCTURE_METAL_COST
+            or agent.current_sector != "colony_core"
+            or self._aliens_in_sector(agent.current_sector)
+        ):
+            return action
+        wasted = self._noop_reason(agent, action) is not None
+        if not wasted and action.action_type not in (ActionType.ISSUE_ORDER, ActionType.CONFRONT_CREW):
+            return action
+        self._log(f"{agent.profile.name} sees the stockpile can cover a structure and breaks ground.")
+        return action.model_copy(
+            update={"action_type": ActionType.BUILD_STRUCTURE, "target_id": "new:habitat", "order_action": None}
+        )
+
+    def _assault_reflex(self, agent: AgentState, action: AgentActionSchema) -> AgentActionSchema:
+        """The endgame is a group action the engine drives, because five small models left to
+        themselves kept gathering metal (it reached 315) for 37 ticks after being told to rally.
+        Once every structure is started: healthy colonists answer a muster call to colony_core;
+        with ASSAULT_PARTY_MIN of them there, the assault is on and they all move out together and
+        shoot the nest once the swarmlings are down; the hurt rest at colony_core. A choice that
+        already serves the plan (fighting, retreating, building, contributing, resting) stands."""
+        world = self.world
+        if len(world.structures) < WIN_STRUCTURES_REQUIRED:
+            return action
+        if world.nest_destroyed and not world.aliens:
+            return action
+        kind = action.action_type
+        keeps = (
+            ActionType.FIRE_WEAPON, ActionType.RETREAT, ActionType.TAKE_COVER, ActionType.REST,
+            ActionType.BUILD_STRUCTURE, ActionType.CONTRIBUTE_RESOURCES, ActionType.REPAIR_STRUCTURE,
+            ActionType.BUILD_CREW_UNIT,
+        )
+        at_core = agent.current_sector == "colony_core"
+
+        def to(action_type: ActionType, target: Optional[str], note: str) -> AgentActionSchema:
+            self._log(f"{agent.profile.name} {note}.")
+            return action.model_copy(
+                update={"action_type": action_type, "target_id": target, "order_action": None}
+            )
+
+        if agent.health <= SIEGE_MIN_HEALTH:
+            if at_core and kind not in keeps and kind != ActionType.ISSUE_ORDER:
+                return to(ActionType.REST, None, "is too hurt for the assault and rests")
+            return action
+        if kind in keeps:
+            return action
+        if not world.assault_on:
+            if not at_core and not (kind == ActionType.EXPLORE_SECTOR and action.target_id == "colony_core"):
+                return to(ActionType.EXPLORE_SECTOR, "colony_core", "answers the muster call and heads for colony_core")
+            if at_core and kind in (ActionType.GATHER_RESOURCE, ActionType.EXPLORE_SECTOR):
+                return to(ActionType.RETURN_TO_COLONY, None, "holds at colony_core for the assault")
+            return action
+        if agent.current_sector != NEST_SECTOR_ID:
+            if not (kind == ActionType.EXPLORE_SECTOR and action.target_id == NEST_SECTOR_ID):
+                return to(ActionType.EXPLORE_SECTOR, NEST_SECTOR_ID, "moves out on the nest")
+            return action
+        if not self._aliens_in_sector(NEST_SECTOR_ID) and not world.nest_destroyed:
+            return to(ActionType.FIRE_WEAPON, NEST_SECTOR_ID, "turns their weapon on the nest")
+        return action
+
+    def _combat_reflex(self, agent: AgentState, action: AgentActionSchema) -> AgentActionSchema:
+        """Hostiles in the colonist's own sector make them fight or fall back, whatever they
+        chose. A response the model already picked (fire_weapon, retreat, take_cover) is left
+        alone, apart from fixing a fire_weapon whose target is not actually here."""
+        aliens_here = self._aliens_in_sector(agent.current_sector)
+        if not aliens_here:
+            return action
+        kind = action.action_type
+        if kind in (ActionType.RETREAT, ActionType.TAKE_COVER):
+            return action
+        if kind == ActionType.FIRE_WEAPON and action.target_id in aliens_here:
+            return action
+        if agent.health >= REFLEX_FIGHT_MIN_HEALTH:
+            self._log(f"{agent.profile.name} drops everything and fires on {aliens_here[0]}.")
+            return action.model_copy(
+                update={"action_type": ActionType.FIRE_WEAPON, "target_id": aliens_here[0], "order_action": None}
+            )
+        self._log(f"{agent.profile.name} is too hurt to fight and falls back.")
+        return action.model_copy(
+            update={"action_type": ActionType.RETREAT, "target_id": None, "order_action": None}
+        )
+
+    @staticmethod
+    def _carried(agent: AgentState) -> int:
+        stock = agent.personal_stock
+        return stock.metal + stock.food + stock.energy + stock.biomatter
 
     def _gather_means_travel(self, agent: AgentState, action: AgentActionSchema) -> bool:
         """True when a gather_resource names a different sector that has something to gather."""
@@ -365,15 +562,26 @@ class WorldEngine:
                 return "you can only contribute at colony_core."
             if held == 0:
                 return "you hold no personal stock to contribute."
+        if kind == ActionType.FIRE_WEAPON:
+            alien = self.world.aliens.get(action.target_id or "")
+            if alien and alien.sector_id != agent.current_sector:
+                return (
+                    f"{action.target_id} is at {alien.sector_id}, not in your sector, so the shot "
+                    "hit nothing. Travel there first."
+                )
+            if not alien and action.target_id not in (NEST_SECTOR_ID, "nest"):
+                return f'"{action.target_id}" is not an alien id here, so you fired at nothing.'
         if kind == ActionType.ISSUE_ORDER:
             if not agent.profile.is_captain:
                 return "only the captain can issue orders."
-            if action.target_id not in self.agents or action.target_id == agent.profile.agent_id:
+            names_sector = action.target_id in self.world.sectors
+            if (action.target_id not in self.agents or action.target_id == agent.profile.agent_id) and not names_sector:
                 return (
-                    f'"{action.target_id}" is not a crew id, so no order was given. target_id '
-                    "must be a crewmate's id from your crew list, never a sector."
+                    f'"{action.target_id}" is neither a crew id nor a sector id, so no order was '
+                    "given. Use a crewmate's id from your crew list, or a sector id to send "
+                    "someone there."
                 )
-            if not action.order_action:
+            if not action.order_action and not names_sector:
                 return "no order_action was set, so no order was given."
         return None
 
@@ -397,7 +605,7 @@ class WorldEngine:
         risky = bool(self._aliens_in_sector(agent.current_sector))
 
         if random.random() < (agent.loyalty / 10):
-            action = self._mechanical_order_action(agent, order.action_type)
+            action = self._mechanical_order_action(agent, order.action_type, order.target_sector)
             self._record_action_stats(agent, action)
             agent.stats.orders_complied += 1
             self._resolve_action(agent, action)
@@ -458,12 +666,22 @@ class WorldEngine:
         return False
 
     def _mechanical_order_action(
-        self, agent: AgentState, action_type: ActionType
+        self, agent: AgentState, action_type: ActionType, destination: Optional[str] = None
     ) -> AgentActionSchema:
         """Construct a sensible action for a complied-with order without going
         through cognition — the agent isn't deciding, they're following orders."""
         target_id = None
-        if action_type == ActionType.FIRE_WEAPON:
+        if (
+            destination
+            and destination != agent.current_sector
+            and action_type in (ActionType.GATHER_RESOURCE, ActionType.FIRE_WEAPON, ActionType.EXPLORE_SECTOR)
+        ):
+            # Ordered to do something somewhere else: go there. A gather order goes through
+            # gather_resource so the travel-then-gather rule applies; the rest just travel.
+            if action_type != ActionType.GATHER_RESOURCE:
+                action_type = ActionType.EXPLORE_SECTOR
+            target_id = destination
+        elif action_type == ActionType.FIRE_WEAPON:
             nearby_aliens = [
                 a.alien_id
                 for a in self.world.aliens.values()
@@ -538,7 +756,20 @@ class WorldEngine:
     def _resolve_action(self, agent: AgentState, action: AgentActionSchema) -> None:
         sector = self.world.sectors.get(agent.current_sector)
 
-        if action.action_type == ActionType.GATHER_RESOURCE and self._gather_means_travel(agent, action):
+        if (
+            action.action_type == ActionType.GATHER_RESOURCE
+            and self._carried(agent) >= CARRY_CAPACITY
+            and agent.current_sector != "colony_core"
+        ):
+            self._log(
+                f"{agent.profile.name}'s pack is full ({self._carried(agent)}/{CARRY_CAPACITY}) "
+                "— heads back to colony_core to unload."
+            )
+            self._resolve_explore(
+                agent, action.model_copy(update={"action_type": ActionType.EXPLORE_SECTOR, "target_id": "colony_core"})
+            )
+
+        elif action.action_type == ActionType.GATHER_RESOURCE and self._gather_means_travel(agent, action):
             # A colonist who says "gather at resource_field_north" while standing elsewhere
             # clearly means "go there and gather" -- real runs had small models repeat exactly
             # that every tick from colony_core, never arriving, because gathering only ever
@@ -558,18 +789,24 @@ class WorldEngine:
                 # gathers and never contributes is personally sitting on
                 # resources the colony can't use at all.
                 gathered = []
+                room = CARRY_CAPACITY - self._carried(agent)
                 for resource, expected in sector.resource_yield.items():
                     amount = max(1, round(expected * random.uniform(
                         RESOURCE_YIELD_VARIANCE_LOW, RESOURCE_YIELD_VARIANCE_HIGH
                     )))
+                    amount = min(amount, room)  # a pack only holds CARRY_CAPACITY in total
+                    if amount <= 0:
+                        continue
+                    room -= amount
                     current = getattr(agent.personal_stock, resource.value)
                     setattr(agent.personal_stock, resource.value, current + amount)
                     agent.stats.resources_gathered_total += amount
                     gathered.append(f"{resource.value}+{amount}")
-                self._log(
-                    f"{agent.profile.name} gathers {', '.join(gathered)} from {sector.sector_id} "
-                    "(personal stock)."
-                )
+                if gathered:
+                    self._log(
+                        f"{agent.profile.name} gathers {', '.join(gathered)} from {sector.sector_id} "
+                        f"(carrying {self._carried(agent)}/{CARRY_CAPACITY})."
+                    )
 
         elif action.action_type == ActionType.CONTRIBUTE_RESOURCES:
             self._resolve_contribute(agent, action.target_id)
@@ -638,19 +875,50 @@ class WorldEngine:
         # IDLE: no effect on world state
 
     def _resolve_issue_order(self, agent: AgentState, action: AgentActionSchema) -> None:
-        if not agent.profile.is_captain or not action.order_action:
+        if not agent.profile.is_captain:
             return  # non-captains attempting to issue orders are a safe no-op
         target = self.agents.get(action.target_id or "")
-        if not target or target.profile.agent_id == agent.profile.agent_id:
+        destination = None
+        if target is None and action.target_id in self.world.sectors:
+            # The captain named a PLACE, not a person -- every real LLM order in a 10-tick run did
+            # this ("issue_order -> resource_field_north") and every one was silently dropped.
+            # What they mean is "send someone there", so pick the crewmate most likely to go
+            # (highest loyalty, preferring someone not already there) and send them.
+            destination = action.target_id
+            target = self._pick_order_recipient(agent, destination)
+        if not target or target.health <= 0 or target.profile.agent_id == agent.profile.agent_id:
+            return
+        order_action = action.order_action or (
+            self._order_for_sector(destination) if destination else None
+        )
+        if not order_action:
             return
         target.pending_order = PendingOrder(
-            captain_id=agent.profile.agent_id, action_type=action.order_action
+            captain_id=agent.profile.agent_id, action_type=order_action, target_sector=destination
         )
         agent.stats.orders_issued += 1
+        where = f" at {destination}" if destination else ""
         self._log(
-            f"{agent.profile.name} orders {target.profile.name} to "
-            f"{action.order_action.value}."
+            f"{agent.profile.name} orders {target.profile.name} to {order_action.value}{where}."
         )
+
+    def _pick_order_recipient(self, captain: AgentState, destination: str) -> Optional[AgentState]:
+        crew = [
+            a
+            for a in self.agents.values()
+            if a.health > 0 and a.profile.agent_id != captain.profile.agent_id
+        ]
+        elsewhere = [a for a in crew if a.current_sector != destination]
+        pool = elsewhere or crew
+        return max(pool, key=lambda a: a.loyalty) if pool else None
+
+    def _order_for_sector(self, sector_id: str) -> ActionType:
+        sector = self.world.sectors[sector_id]
+        if self._aliens_in_sector(sector_id) or sector.sector_type == SectorType.ALIEN_NEST:
+            return ActionType.FIRE_WEAPON
+        if sector.resource_yield and sector.explored:
+            return ActionType.GATHER_RESOURCE
+        return ActionType.EXPLORE_SECTOR
 
     def _resolve_explore(self, agent: AgentState, action: AgentActionSchema) -> None:
         target_id = action.target_id or agent.current_sector
@@ -827,14 +1095,38 @@ class WorldEngine:
             self._log(f"{agent.profile.name} continues building the {structure.structure_type}.")
 
     def _resolve_fire_weapon(self, agent: AgentState, action: AgentActionSchema) -> None:
-        alien = self.world.aliens.get(action.target_id or "")
-        if not alien:
+        world = self.world
+        if (
+            action.target_id in (NEST_SECTOR_ID, "nest")
+            and agent.current_sector == NEST_SECTOR_ID
+            and not world.nest_destroyed
+        ):
+            world.nest_health = max(0, world.nest_health - WEAPON_DAMAGE)
+            if world.nest_health == 0:
+                self._destroy_nest(f"{agent.profile.name} brings it down")
+            else:
+                self._log(
+                    f"{agent.profile.name} fires on the alien nest "
+                    f"({world.nest_health}/{NEST_MAX_HP} HP left)."
+                )
+            return
+        alien = world.aliens.get(action.target_id or "")
+        # Shots only land on a target in the shooter's own sector. Before this, fire_weapon at an
+        # alien id hit it from anywhere on the map, which would let the colony snipe the whole
+        # swarm from colony_core and make the nest pointless.
+        if not alien or alien.sector_id != agent.current_sector:
             return
         alien.health -= WEAPON_DAMAGE
         if alien.health <= 0:
-            del self.world.aliens[alien.alien_id]
+            del world.aliens[alien.alien_id]
             agent.stats.aliens_killed += 1
-            self._log(f"{agent.profile.name} destroys {alien.alien_id}!")
+            world.swarm_kills += 1
+            self._log(
+                f"{agent.profile.name} destroys {alien.alien_id}! "
+                f"({world.swarm_kills}/{SWARM_KILLS_TO_COLLAPSE} swarmlings killed)"
+            )
+            if world.swarm_kills >= SWARM_KILLS_TO_COLLAPSE and not world.nest_destroyed:
+                self._destroy_nest(f"{SWARM_KILLS_TO_COLLAPSE} swarmlings dead, the swarm is broken")
         else:
             self._log(
                 f"{agent.profile.name} fires on {alien.alien_id} ({alien.health} HP left)."

@@ -32,11 +32,19 @@ class AgentProfile(BaseModel):
     model: str = "qwen2.5:3b"
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     is_captain: bool = False
+    # What this colonist is mainly for, shown in their prompt. Without it all five small models
+    # converged on the same easiest action (everyone foraging food while metal sat at 20 and
+    # nothing got built); a division of labor is what lets five agents move the colony toward
+    # winning together. Personality still colors HOW they do it.
+    duty: str = ""
 
 
 class PendingOrder(BaseModel):
     captain_id: str
     action_type: ActionType
+    # Where the captain wants this done, when they named a sector instead of (or as well as) a
+    # crewmate -- the recipient travels there first. See engine.py's _resolve_issue_order.
+    target_sector: Optional[str] = None
 
 
 class PersonalStock(BaseModel):

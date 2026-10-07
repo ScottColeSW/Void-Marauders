@@ -139,6 +139,20 @@ their reasons and stay open (the judge never decides which side is right). Wheth
 >
 > **Prompt note:** colonists now see a sector list (what each sector yields, what is still unexplored), colony progress, the captain's crew ids, and, when their last action did nothing, a one-line "LAST TURN WASTED" explanation. An 8-tick check before this change had four of five colonists repeating a no-op action every tick; after it, four of five travel, gather, explore or give valid orders (the medic, then on the small `gemma2:2b` at temperature 0.3, still idled, so she now runs `qwen2.5:3b` at 0.7). Each prompt also ends its map with a "TO WIN, THE COLONY STILL NEEDS" list built from live state: structures to start or finish, the metal that costs, and the hostiles at `alien_nest`. The benchmark and memory A/B numbers recorded in this README and in `docs/` predate this prompt, so re-run them before comparing against new results.
 
+### How the colony wins
+
+The colony wins when **3 structures are complete, the alien nest is destroyed, and no hostiles remain.**
+
+- **Building.** Each structure costs 15 metal (gathered at `resource_field_north`) and finishes on its own at 5% per tick, faster when colonists build on it. The dashboard's *Structures* panel lists every build with its progress and, once energy runs out, its decay.
+- **Carrying.** A colonist carries at most 20. A full pack sends them back to `colony_core`, and anyone standing there unloads automatically, keeping up to 5 food as a personal reserve.
+- **The nest.** `alien_nest` has 100 HP and births a swarmling every 6 ticks (at most 4 alive). It falls when colonists shoot it (`fire_weapon` at `alien_nest` while standing there, 15 damage a hit) or when the colony has killed 10 swarmlings in total. Shots only land on targets in the shooter's own sector.
+- **The assault is a group action.** Once all 3 structures are started, healthy colonists muster at `colony_core`; when 3 are there together they move out as one, kill the defenders, then shoot the nest, then mop up. Sending colonists in one at a time got them killed, so the engine drives this phase.
+- **Reflexes.** A colonist with hostiles in their sector fights (or retreats below 40 health) whatever the model chose, and a wasted turn at the base becomes a build when the stockpile can cover one. Small models ignore a general instruction but follow an exact one, so these exist where a real run showed the models stalling.
+- **Orders.** The captain can name a sector as an order target; the most loyal crewmate is sent there.
+- **Duties.** Each colonist has a role (builder, commander, supply, defender, forager) shown in their prompt, so five agents do not all do the same easy thing.
+
+A real run with the default roster won at tick 27 with no deaths. Energy is the soft spot: finished structures drain it, and at zero they slowly decay.
+
 ### Useful endpoints while it's running
 - `GET /state` — full world state (resources, sectors, aliens, structures) as JSON
 - `GET /agents` — colonist status (health, stress, location)
@@ -277,7 +291,7 @@ a real batch rather than trusting the single-tick number alone.
 - [x] **Phase 2:** Ollama integration with strict Pydantic-validated JSON output (schema-constrained, with a safe fallback if a local model hallucinates).
 - [x] **Phase 3:** Persistent episodic memory — agents recall past events, standing reads on crew/sectors, and unresolved contradictions via a [Palimpsest](https://github.com/ScottColeSW/Palimpsest) mesh per colonist.
 - [x] **Interim frontend:** zero-build web dashboard for observing the colony live.
-- [x] **Win/loss conditions:** colony wipeout ends the run; clearing all threats and completing 3 structures wins it.
+- [x] **Win/loss conditions:** colony wipeout ends the run; winning takes 3 completed structures, the alien nest destroyed, and no hostiles left. See "How the colony wins" below.
 - [x] **Real space and real economy:** sector adjacency (hub-and-spoke through colony_core, matching the dashboard's map) replaces free teleportation; food and energy have real upkeep costs and consequences instead of climbing forever untouched.
 - [x] **Headless benchmarking:** `run_benchmark.py` drives the engine directly for reproducible model comparison, raw facts recorded (never a stored score), with a chart report served live from the running dashboard.
 - [ ] **Phase 4:** Godot UI integration — tile-based ship/colony rendering, scrolling speech bubbles, pathfinding.

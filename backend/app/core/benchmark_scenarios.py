@@ -14,7 +14,7 @@ comparable to trials under a new one.
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
-SCENARIO_VERSION = 3
+SCENARIO_VERSION = 4
 # Bumped 1->2: swarm_pressure's extra aliens moved from alien_nest (a sector
 # real trials showed agents reliably never visit voluntarily -- two real LLM
 # runs, memory on and off, both scored identically because nobody ever
@@ -31,6 +31,12 @@ SCENARIO_VERSION = 3
 # alien-free (a real place to retreat TO) and halves extra_aliens to 2, one
 # each on the two solo colonists (landing_ship, resource_field_south) --
 # still an unavoidable fight-or-flee test, but a survivable one.
+# Bumped 3->4: rules changed for every scenario, not just starting conditions. The alien nest now
+# births a swarmling every 6 ticks (max 4 alive) until it is shot down or 10 swarmlings are killed,
+# and winning needs the nest destroyed; colonists with hostiles in their sector now fight or retreat
+# by reflex instead of trusting the model to; fire_weapon only lands on a target in the shooter's
+# sector; a pack holds 20 and unloads automatically at colony_core; a captain's order that names a
+# sector sends someone there. Trials under version 3 are not comparable to these.
 
 
 @dataclass(frozen=True)
