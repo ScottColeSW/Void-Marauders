@@ -8,17 +8,24 @@ from app.core import cognition, memory
 from app.core.world_seed import (
     ASSAULT_PARTY_MIN,
     CARRY_CAPACITY,
+    FOUNDRY_METAL,
+    HABITAT_HEAL,
+    HYDROPONICS_FOOD,
     NEST_MAX_ALIVE,
     NEST_MAX_HP,
     NEST_SECTOR_ID,
     NEST_SPAWN_INTERVAL,
     PERSONAL_FOOD_RESERVE,
+    POWER_PLANT_ENERGY,
     SECTOR_ADJACENCY,
     SIEGE_MIN_HEALTH,
+    STRUCTURE_LABELS,
+    STRUCTURE_SITES,
     SWARM_KILLS_TO_COLLAPSE,
     SWARMLING_HEALTH,
     WEAPON_DAMAGE,
     create_initial_world,
+    next_build_site,
 )
 from app.schemas.agent import (
     ActionType,
@@ -75,7 +82,11 @@ WIN_STRUCTURES_REQUIRED = 3
 FOOD_UPKEEP_PER_TICK = 1
 STARVATION_DAMAGE = 5
 ENERGY_UPKEEP_PER_STRUCTURE = 1
-STRUCTURE_DECAY_HP = 5
+# Was 5, which ruined a habitat 20 ticks after energy ran out. Three finished structures drain
+# 3 energy a tick, so a real winning run had energy at 0 within about ten ticks of the last
+# build, and the decay then showed up on the dashboard almost immediately. 2 leaves 50 ticks
+# to recover (energy from geothermal_vent, repairs from biomatter) before a structure is lost.
+STRUCTURE_DECAY_HP = 2
 
 # Losing a colonist used to be permanent -- once dead, always dead, with no
 # lever left to pull. The crew are cybernetic units (Karl's role is literally
@@ -262,9 +273,36 @@ class WorldEngine:
                         f"{structure.structure_type} at {structure.sector_id} construction complete."
                     )
 
+        self._structure_output()
         self._apply_food_upkeep()
         self._apply_energy_upkeep()
         self._nest_step()
+
+    def _structure_output(self) -> None:
+        """What each finished structure does every tick. Runs before the upkeep drains so a power
+        plant's energy lands first and the colony does not dip to zero on the way to a surplus.
+        Hydroponics and the foundry only run while the colony has power (checked once, up front,
+        so the plant's own output this tick does not count as having been on)."""
+        resources = self.world.colony_resources
+        powered = resources.energy > 0
+        for structure in self.world.structures.values():
+            if structure.build_progress < 100 or structure.hp <= 0:
+                continue
+            kind = structure.structure_type
+            if kind == "power_plant":
+                resources.energy += POWER_PLANT_ENERGY
+            elif kind == "hydroponics" and powered:
+                resources.food += HYDROPONICS_FOOD
+            elif kind == "foundry" and powered:
+                resources.metal += FOUNDRY_METAL
+            elif kind == "habitat":
+                for agent in self.agents.values():
+                    if (
+                        agent.current_sector == structure.sector_id
+                        and 0 < agent.health < 100
+                        and not self._is_starving(agent)
+                    ):
+                        agent.health = min(100, agent.health + HABITAT_HEAL)
 
     def _nest_step(self) -> None:
         """While the nest stands it births a swarmling every NEST_SPAWN_INTERVAL ticks, up to
@@ -377,6 +415,7 @@ class WorldEngine:
                 action, fallback = cognition.decide(agent, perception, self.world)
                 action = self._combat_reflex(agent, action)
                 action = self._build_reflex(agent, action)
+                action = self._idle_reflex(agent, action)
                 action = self._assault_reflex(agent, action)
                 self._record_action_stats(agent, action, fallback)
                 if action.spoken_dialogue:
@@ -425,10 +464,12 @@ class WorldEngine:
         (idle, a dead action, an order or a confrontation at the base), so nobody who is actually
         doing something useful is overridden."""
         world = self.world
+        site = next_build_site(world.structures.values())
         if (
-            len(world.structures) >= WIN_STRUCTURES_REQUIRED
+            site is None
+            or len(world.structures) >= WIN_STRUCTURES_REQUIRED
             or world.colony_resources.metal < STRUCTURE_METAL_COST
-            or agent.current_sector != "colony_core"
+            or agent.current_sector not in ("colony_core", site)
             or self._aliens_in_sector(agent.current_sector)
         ):
             return action
@@ -437,7 +478,46 @@ class WorldEngine:
             return action
         self._log(f"{agent.profile.name} sees the stockpile can cover a structure and breaks ground.")
         return action.model_copy(
-            update={"action_type": ActionType.BUILD_STRUCTURE, "target_id": "new:habitat", "order_action": None}
+            update={"action_type": ActionType.BUILD_STRUCTURE, "target_id": site, "order_action": None}
+        )
+
+    # What the colony wants in stock before it stops caring about a resource: enough metal for two
+    # more structures, a food buffer, enough energy to run what it has built. Biomatter is only ever
+    # wanted for repairs and lives in the nest, so it is never what a "go gather" defaults to.
+    GATHER_TARGETS = {"metal": 30, "food": 60, "energy": 20}
+
+    def _best_gather_sector(self) -> Optional[str]:
+        """The safe, explored resource sector whose resource the colony is shortest of."""
+        resources = self.world.colony_resources
+        best, best_gap = None, None
+        for sector in self.world.sectors.values():
+            if not sector.explored or not sector.resource_yield or sector.sector_type == SectorType.ALIEN_NEST:
+                continue
+            gap = max(
+                (self.GATHER_TARGETS.get(r.value, 0) - getattr(resources, r.value) for r in sector.resource_yield),
+                default=None,
+            )
+            if gap is not None and (best_gap is None or gap > best_gap):
+                best, best_gap = sector.sector_id, gap
+        return best
+
+    def _idle_reflex(self, agent: AgentState, action: AgentActionSchema) -> AgentActionSchema:
+        """A turn that would accomplish nothing becomes a gather. A live run had nobody gathering
+        metal for eight ticks: one colonist "explored" the sector they were already in, one kept
+        repairing a structure that was not damaged, and the "LAST TURN WASTED" note was ignored every
+        time. Standing in a resource sector, they gather there; anywhere else they head for the
+        sector the colony is shortest of. A full pack is left alone (it sends them to unload)."""
+        if self._noop_reason(agent, action) is None or self._carried(agent) >= CARRY_CAPACITY:
+            return action
+        if self._aliens_in_sector(agent.current_sector):
+            return action
+        here = self.world.sectors.get(agent.current_sector)
+        target = agent.current_sector if here and here.resource_yield else self._best_gather_sector()
+        if target is None:
+            return action
+        self._log(f"{agent.profile.name} stops idling and goes to work.")
+        return action.model_copy(
+            update={"action_type": ActionType.GATHER_RESOURCE, "target_id": target, "order_action": None}
         )
 
     def _assault_reflex(self, agent: AgentState, action: AgentActionSchema) -> AgentActionSchema:
@@ -508,6 +588,11 @@ class WorldEngine:
             update={"action_type": ActionType.RETREAT, "target_id": None, "order_action": None}
         )
 
+    def _is_starving(self, agent: AgentState) -> bool:
+        """The shared stockpile is empty and the colonist has no personal food to fall back on --
+        exactly the case _apply_food_upkeep damages them in."""
+        return self.world.colony_resources.food <= 0 and agent.personal_stock.food <= 0
+
     @staticmethod
     def _carried(agent: AgentState) -> int:
         stock = agent.personal_stock
@@ -536,8 +621,23 @@ class WorldEngine:
             return "idle does nothing."
         if kind == ActionType.REPAIR_HULL:
             return "repair_hull has no effect."
+        if kind == ActionType.REPAIR_STRUCTURE:
+            structure = self.world.structures.get(action.target_id or "")
+            if structure is None:
+                return f'"{action.target_id}" is not a structure id, so nothing was repaired.'
+            if structure.build_progress < 100:
+                return "that structure is still being built, and repair only fixes damage. Use build_structure to speed it up."
+            if structure.hp >= 100:
+                return "that structure is undamaged."
+            if self.world.colony_resources.biomatter < STRUCTURE_REPAIR_BIOMATTER_COST:
+                return (
+                    f"repairing costs {STRUCTURE_REPAIR_BIOMATTER_COST} biomatter and the colony has "
+                    "less; biomatter only comes from alien_nest."
+                )
         if kind == ActionType.REST and agent.health >= 100:
             return "you are at full health, so rest did nothing."
+        if kind == ActionType.REST and self._is_starving(agent):
+            return "you are starving, so rest cannot heal you. The colony needs food."
         if (
             kind == ActionType.GATHER_RESOURCE
             and not self._gather_means_travel(agent, action)
@@ -688,10 +788,13 @@ class WorldEngine:
                 if a.sector_id == agent.current_sector
             ]
             target_id = nearby_aliens[0] if nearby_aliens else None
-        elif action_type in (ActionType.GATHER_RESOURCE, ActionType.EXPLORE_SECTOR):
+        elif action_type == ActionType.GATHER_RESOURCE:
+            here = self.world.sectors.get(agent.current_sector)
+            target_id = agent.current_sector if here and here.resource_yield else self._best_gather_sector()
+        elif action_type == ActionType.EXPLORE_SECTOR:
             target_id = agent.current_sector
         elif action_type == ActionType.BUILD_STRUCTURE:
-            target_id = "new:habitat"
+            target_id = "new:auto"  # the engine picks the next free site
         elif action_type == ActionType.REPAIR_STRUCTURE:
             for structure in self.world.structures.values():
                 if structure.sector_id == agent.current_sector and structure.hp < 100:
@@ -866,7 +969,14 @@ class WorldEngine:
                 other.stress_level = min(10, other.stress_level + 1)
 
         elif action.action_type == ActionType.REST:
-            agent.health = min(100, agent.health + 15)
+            # Resting heals 15, and starvation costs 5 a tick, so a colonist who rested every third
+            # tick broke even forever on an empty stockpile: a real mock run held two colonists at
+            # 75 HP for 70 ticks with food at zero (1,600 damage taken, ~1,575 healed). Nobody
+            # recovers on an empty stomach, so a rest does nothing for health until they can eat.
+            if self._is_starving(agent):
+                self._log(f"{agent.profile.name} rests but cannot recover while starving.")
+            else:
+                agent.health = min(100, agent.health + 15)
             agent.stress_level = max(0, agent.stress_level - 1)
 
         elif action.action_type == ActionType.ISSUE_ORDER:
@@ -1064,35 +1174,45 @@ class WorldEngine:
         )
 
     def _resolve_build(self, agent: AgentState, action: AgentActionSchema) -> None:
-        resources = self.world.colony_resources
+        """target_id is an existing structure's id (push it along), a build site (a sector id), or
+        anything starting "new:" / nothing (take the next free site). One structure per sector, its
+        kind fixed by the sector -- see world_seed.STRUCTURE_SITES. Like gathering, building where
+        you are not standing sends you there this turn; the structure goes up on your next one."""
+        world = self.world
+        resources = world.colony_resources
         target = action.target_id or ""
 
-        if target.startswith("new:"):
-            structure_type = target.split(":", 1)[1] or "habitat"
-            if resources.metal < STRUCTURE_METAL_COST:
-                self._log(
-                    f"{agent.profile.name} wants to build a {structure_type} "
-                    "but there isn't enough metal."
-                )
-                return
-            resources.metal -= STRUCTURE_METAL_COST
-            structure_id = f"{structure_type}_{uuid.uuid4().hex[:6]}"
-            self.world.structures[structure_id] = StructureEntity(
-                structure_id=structure_id,
-                structure_type=structure_type,
-                sector_id=agent.current_sector,
-                build_progress=BUILD_PROGRESS_PER_ACTION,
-            )
-            self._log(
-                f"{agent.profile.name} breaks ground on a new {structure_type} "
-                f"at {agent.current_sector}."
-            )
-        elif target in self.world.structures:
-            structure = self.world.structures[target]
-            structure.build_progress = min(
-                100, structure.build_progress + BUILD_PROGRESS_PER_ACTION
-            )
+        if target in world.structures:
+            structure = world.structures[target]
+            structure.build_progress = min(100, structure.build_progress + BUILD_PROGRESS_PER_ACTION)
             self._log(f"{agent.profile.name} continues building the {structure.structure_type}.")
+            return
+
+        taken = {s.sector_id for s in world.structures.values()}
+        site = target if target in STRUCTURE_SITES and target not in taken else next_build_site(world.structures.values())
+        if site is None:
+            self._log(f"{agent.profile.name} finds no free build site: every sector already has its structure.")
+            return
+        kind = STRUCTURE_SITES[site]
+        label = STRUCTURE_LABELS[kind]
+        if agent.current_sector != site:
+            self._log(f"{agent.profile.name} heads for {site} to build the {label}.")
+            self._resolve_explore(
+                agent, action.model_copy(update={"action_type": ActionType.EXPLORE_SECTOR, "target_id": site})
+            )
+            return
+        if resources.metal < STRUCTURE_METAL_COST:
+            self._log(f"{agent.profile.name} wants to build the {label} but there isn't enough metal.")
+            return
+        resources.metal -= STRUCTURE_METAL_COST
+        structure_id = f"{kind}_{uuid.uuid4().hex[:6]}"
+        world.structures[structure_id] = StructureEntity(
+            structure_id=structure_id,
+            structure_type=kind,
+            sector_id=site,
+            build_progress=BUILD_PROGRESS_PER_ACTION,
+        )
+        self._log(f"{agent.profile.name} breaks ground on the {label} at {site}.")
 
     def _resolve_fire_weapon(self, agent: AgentState, action: AgentActionSchema) -> None:
         world = self.world
@@ -1140,4 +1260,12 @@ def get_engine() -> WorldEngine:
     global _engine
     if _engine is None:
         _engine = WorldEngine()
+    return _engine
+
+
+def reset_engine() -> WorldEngine:
+    """Start a fresh colony (the dashboard's "run it again" button). Colonist memory files are
+    left alone on purpose: they persist across restarts by design (see memory.py)."""
+    global _engine
+    _engine = WorldEngine()
     return _engine

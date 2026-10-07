@@ -8,8 +8,12 @@ from app.core.world_seed import (
     NEST_SPAWN_INTERVAL,
     PERSONAL_FOOD_RESERVE,
     SIEGE_MIN_HEALTH,
+    STRUCTURE_EFFECTS,
+    STRUCTURE_LABELS,
+    STRUCTURE_SITES,
     SWARM_KILLS_TO_COLLAPSE,
     WEAPON_DAMAGE,
+    next_build_site,
 )
 from app.schemas.agent import ActionType
 
@@ -279,10 +283,14 @@ def build_colony_next_steps(world, current_sector: str = "", health: int = 100) 
     if still_to_start > 0:
         metal = resources.metal
         if metal >= STRUCTURE_METAL_COST:
+            site = next_build_site(world.structures.values())
+            kind = STRUCTURE_SITES[site]
+            walk = "" if current_sector == site else f" You walk to {site} first and it goes up on your next turn."
             required.append(
-                f'use action_type "build_structure" with target_id "new:habitat" (works in any sector; '
-                f"{still_to_start} more structure(s) are still needed and the stockpile has metal={metal}). "
-                "Do it now instead of gathering more."
+                f'use action_type "build_structure" with target_id "{site}": it goes up as a '
+                f"{STRUCTURE_LABELS[kind]} ({STRUCTURE_EFFECTS[kind]}).{walk} {still_to_start} more "
+                f"structure(s) are still needed and the stockpile has metal={metal}. Do it now "
+                "instead of gathering more."
             )
         else:
             steps.append(
@@ -370,6 +378,13 @@ def build_sector_overview(world, current_sector: str, health: int = 100) -> str:
             detail = "the base: contribute_resources and build here"
         else:
             detail = "nothing to gather here"
+        built = next((s for s in world.structures.values() if s.sector_id == sector.sector_id), None)
+        if built:
+            state = "complete" if built.build_progress >= 100 else f"{built.build_progress}% built"
+            detail += f"; has a {STRUCTURE_LABELS.get(built.structure_type, built.structure_type)} ({state}: {STRUCTURE_EFFECTS.get(built.structure_type, '')})"
+        elif sector.sector_id in STRUCTURE_SITES:
+            kind = STRUCTURE_SITES[sector.sector_id]
+            detail += f"; BUILD SITE for a {STRUCTURE_LABELS[kind]} ({STRUCTURE_EFFECTS[kind]})"
         lines.append(f"- {sector.sector_id}: {detail}{here}")
 
     structures = list(world.structures.values())

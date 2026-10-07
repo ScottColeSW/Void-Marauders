@@ -143,7 +143,13 @@ their reasons and stay open (the judge never decides which side is right). Wheth
 
 The colony wins when **3 structures are complete, the alien nest is destroyed, and no hostiles remain.**
 
-- **Building.** Each structure costs 15 metal (gathered at `resource_field_north`) and finishes on its own at 5% per tick, faster when colonists build on it. The dashboard's *Structures* panel lists every build with its progress and, once energy runs out, its decay.
+- **Building: one structure per sector, each with its own job.** A sector's structure is fixed by the sector, costs 15 metal, and finishes on its own at 5% per tick (faster when colonists build on it). Building where you are not standing sends you there first, like gathering. The win needs any 3 of the 4:
+  - **Habitat** (`colony_core`): colonists standing there recover 3 HP a tick.
+  - **Power Plant** (`geothermal_vent`): +4 energy a tick. It is the answer to the energy drain below.
+  - **Hydroponics** (`resource_field_south`): +2 food a tick while the colony has energy.
+  - **Foundry** (`resource_field_north`): +2 metal a tick while the colony has energy.
+
+  Every finished structure costs 1 energy a tick; at zero energy they lose 2 HP a tick and are lost at 0. The dashboard draws each building on its sector, and the *Structures* panel lists every build with its effect, progress and decay, plus the sites still open.
 - **Carrying.** A colonist carries at most 20. A full pack sends them back to `colony_core`, and anyone standing there unloads automatically, keeping up to 5 food as a personal reserve.
 - **The nest.** `alien_nest` has 100 HP and births a swarmling every 6 ticks (at most 4 alive). It falls when colonists shoot it (`fire_weapon` at `alien_nest` while standing there, 15 damage a hit) or when the colony has killed 10 swarmlings in total. Shots only land on targets in the shooter's own sector.
 - **The assault is a group action.** Once all 3 structures are started, healthy colonists muster at `colony_core`; when 3 are there together they move out as one, kill the defenders, then shoot the nest, then mop up. Sending colonists in one at a time got them killed, so the engine drives this phase.
@@ -151,7 +157,7 @@ The colony wins when **3 structures are complete, the alien nest is destroyed, a
 - **Orders.** The captain can name a sector as an order target; the most loyal crewmate is sent there.
 - **Duties.** Each colonist has a role (builder, commander, supply, defender, forager) shown in their prompt, so five agents do not all do the same easy thing.
 
-A real run with the default roster won at tick 27 with no deaths. Energy is the soft spot: finished structures drain it, and at zero they slowly decay.
+A real run with the default roster won at tick 27 with no deaths (that run predates the per-sector structures above). Energy is the soft spot: finished structures drain it, and a Power Plant is how the colony stays ahead of that.
 
 ### Useful endpoints while it's running
 - `GET /state` — full world state (resources, sectors, aliens, structures) as JSON

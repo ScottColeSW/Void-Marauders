@@ -61,6 +61,42 @@ SIEGE_MIN_HEALTH = 60
 PERSONAL_FOOD_RESERVE = 5
 
 
+# Structures: one per sector, and each type has its own job. Before this every structure was a
+# generic "habitat" put up wherever the builder stood, so all three piled up in colony_core and
+# did nothing but cost energy. Now a sector's structure is fixed by the sector (a power plant can
+# only go where the heat is), and the win still needs WIN_STRUCTURES_REQUIRED of them finished.
+# The dict order is the build priority: the first sector without a structure is the next site.
+STRUCTURE_SITES = {
+    "colony_core": "habitat",
+    "geothermal_vent": "power_plant",
+    "resource_field_south": "hydroponics",
+    "resource_field_north": "foundry",
+}
+STRUCTURE_LABELS = {
+    "habitat": "Habitat",
+    "power_plant": "Power Plant",
+    "hydroponics": "Hydroponics",
+    "foundry": "Foundry",
+}
+HABITAT_HEAL = 3
+POWER_PLANT_ENERGY = 4
+HYDROPONICS_FOOD = 2
+FOUNDRY_METAL = 2
+STRUCTURE_EFFECTS = {
+    "habitat": f"colonists in its sector recover {HABITAT_HEAL} HP a tick",
+    "power_plant": f"+{POWER_PLANT_ENERGY} energy a tick",
+    "hydroponics": f"+{HYDROPONICS_FOOD} food a tick while the colony has energy",
+    "foundry": f"+{FOUNDRY_METAL} metal a tick while the colony has energy",
+}
+
+
+def next_build_site(structures):
+    """The first site in STRUCTURE_SITES with no structure on it, or None when every site is taken.
+    `structures` is any iterable of StructureEntity."""
+    taken = {s.sector_id for s in structures}
+    return next((site for site in STRUCTURE_SITES if site not in taken), None)
+
+
 def create_initial_world() -> Tuple[WorldState, Dict[str, AgentState]]:
     sectors = {
         "landing_ship": Sector(
@@ -149,7 +185,7 @@ def create_initial_world() -> Tuple[WorldState, Dict[str, AgentState]]:
                 personality_trait="Cynical and paranoid, secretly distrusts Valerie",
                 model="qwen2.5:3b",
                 temperature=0.5,
-                duty="BUILDER. Whenever the colony stockpile has metal of 15 or more and fewer than 3 structures exist, go to colony_core and use build_structure (target_id new:habitat to start one, or an unfinished structure's id to push it along). Otherwise gather metal at resource_field_north.",
+                duty="BUILDER. Whenever the colony stockpile has metal of 15 or more and fewer than 3 structures exist, use build_structure with the build site named in the prompt (each sector gets one structure of its own kind; you walk there and build). An unfinished structure's id as target_id pushes it along. Otherwise gather metal at resource_field_north.",
             ),
             current_sector="colony_core",
         ),

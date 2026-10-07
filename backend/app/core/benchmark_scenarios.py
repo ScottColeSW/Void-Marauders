@@ -36,7 +36,8 @@ SCENARIO_VERSION = 4
 # and winning needs the nest destroyed; colonists with hostiles in their sector now fight or retreat
 # by reflex instead of trusting the model to; fire_weapon only lands on a target in the shooter's
 # sector; a pack holds 20 and unloads automatically at colony_core; a captain's order that names a
-# sector sends someone there. Trials under version 3 are not comparable to these.
+# sector sends someone there; structures decay 2 HP a tick without energy (was 5).
+# Trials under version 3 are not comparable to these.
 
 
 @dataclass(frozen=True)

@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.core import benchmark_db, cognition, memory
-from app.core.engine import get_engine
+from app.core.engine import get_engine, reset_engine
 
 # generate_report.py lives at the backend/ root (sibling of app/), not inside
 # the app package -- importable here because uvicorn is always run from
@@ -31,13 +31,13 @@ _tick_task: Optional[asyncio.Task] = None
 
 
 async def _tick_loop() -> None:
-    engine = get_engine()
     loop = asyncio.get_running_loop()
     while True:
         await asyncio.sleep(TICK_INTERVAL_SECONDS)
         # tick() does blocking network I/O (Ollama calls) — run it off the event
         # loop so it doesn't freeze every other request for the tick's duration.
-        await loop.run_in_executor(None, engine.tick)
+        # Looked up every time, not held: a reset swaps in a brand-new engine.
+        await loop.run_in_executor(None, lambda: get_engine().tick())
 
 
 @asynccontextmanager
@@ -66,7 +66,7 @@ async def no_cache_static(request, call_next):
     # serving stale cached JS/CSS after an edit is more confusing than a demo
     # server always doing one extra round-trip.
     response = await call_next(request)
-    if request.url.path.startswith("/static/") or request.url.path == "/":
+    if request.url.path.startswith("/static/") or request.url.path in ("/", "/summary"):
         response.headers["Cache-Control"] = "no-cache"
     return response
 
@@ -74,6 +74,11 @@ async def no_cache_static(request, call_next):
 @app.get("/")
 def get_dashboard():
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+
+@app.get("/summary")
+def get_summary_page():
+    return FileResponse(os.path.join(STATIC_DIR, "summary.html"))
 
 
 @app.get("/state")
@@ -89,6 +94,12 @@ def get_agents():
 @app.get("/events")
 def get_events(limit: int = 20):
     return get_engine().world.event_log[-limit:]
+
+
+@app.post("/reset")
+def reset_game():
+    reset_engine()
+    return {"status": "reset"}
 
 
 @app.post("/tick")

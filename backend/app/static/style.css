@@ -23,6 +23,25 @@ body {
   padding: 1.25rem 1.5rem 3rem;
 }
 
+/* An alien landscape behind everything: a violet sky with two moons and scattered stars, two ridges of
+   jagged mountains, and a teal glow at the horizon. Fixed and behind the content, so the panels (which
+   all have solid backgrounds) stay readable on top of it. All inline SVG, nothing to load. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 300' preserveAspectRatio='none'%3E%3Cpath d='M0 300 V215 L60 185 L120 225 L200 160 L270 220 L350 175 L430 235 L520 150 L590 210 L680 170 L760 230 L850 165 L930 220 L1020 180 L1100 225 L1200 190 V300 Z' fill='%23090614'/%3E%3C/svg%3E") bottom / 100% 22vh no-repeat,
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 300' preserveAspectRatio='none'%3E%3Cpath d='M0 300 V170 L90 110 L150 160 L250 70 L330 150 L410 95 L500 165 L590 60 L670 140 L760 85 L850 160 L950 75 L1040 140 L1120 100 L1200 150 V300 Z' fill='%23150f29'/%3E%3Cpath d='M250 70 L215 112 L240 104 L262 118 Z M590 60 L552 108 L580 100 L606 114 Z M950 75 L918 112 L942 105 L962 116 Z' fill='%232a2150' opacity='.7'/%3E%3C/svg%3E") bottom / 100% 36vh no-repeat,
+    linear-gradient(to top, rgba(46, 224, 190, 0.22), rgba(46, 224, 190, 0) 34%),
+    radial-gradient(circle at 82% 17%, rgba(190, 255, 235, 0.85) 0, rgba(190, 255, 235, 0.85) 2.6vmin, rgba(120, 255, 215, 0.18) 2.8vmin, transparent 7vmin),
+    radial-gradient(circle at 64% 29%, rgba(236, 190, 255, 0.8) 0, rgba(236, 190, 255, 0.8) 1.3vmin, rgba(200, 120, 255, 0.16) 1.5vmin, transparent 4.5vmin),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='360' height='360'%3E%3Cg fill='white'%3E%3Ccircle cx='24' cy='40' r='1' opacity='.8'/%3E%3Ccircle cx='96' cy='210' r='.8' opacity='.6'/%3E%3Ccircle cx='150' cy='70' r='1.2' opacity='.9'/%3E%3Ccircle cx='210' cy='300' r='.8' opacity='.5'/%3E%3Ccircle cx='258' cy='128' r='1' opacity='.7'/%3E%3Ccircle cx='320' cy='20' r='.9' opacity='.7'/%3E%3Ccircle cx='330' cy='250' r='1.1' opacity='.8'/%3E%3Ccircle cx='60' cy='320' r='.8' opacity='.5'/%3E%3Ccircle cx='190' cy='160' r='.7' opacity='.6'/%3E%3Ccircle cx='288' cy='340' r='1' opacity='.6'/%3E%3C/g%3E%3C/svg%3E"),
+    linear-gradient(to bottom, #04060b 0%, #0b1022 38%, #1a1233 66%, #2a1740 86%, #1a2b3a 100%);
+}
+
 header {
   display: flex;
   align-items: baseline;
@@ -201,19 +220,19 @@ main {
   stroke-dasharray: 3 3;
 }
 
-.map-tile rect {
+.map-tile > rect {
   fill: var(--panel-bg);
   stroke: var(--border);
   stroke-width: 1.5;
   transition: fill 0.3s ease;
 }
 
-.map-tile.unexplored rect {
+.map-tile.unexplored > rect {
   fill: #0a0f0c;
   stroke-dasharray: 4 3;
 }
 
-.map-tile.threat rect {
+.map-tile.threat > rect {
   stroke: var(--danger);
 }
 
@@ -221,6 +240,25 @@ main {
   fill: var(--text);
   font-size: 10px;
   font-family: inherit;
+}
+
+.map-build-pct {
+  fill: var(--amber);
+  font-size: 9px;
+  font-family: inherit;
+}
+
+.map-decay-dot {
+  fill: var(--danger);
+  stroke: var(--bg);
+  stroke-width: 1;
+}
+
+#map {
+  background: rgba(7, 10, 16, 0.6);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem;
 }
 
 .map-tile.unexplored .map-tile-label {
@@ -257,6 +295,217 @@ main {
   stroke-width: 1.5;
 }
 
+.skirmish {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 0.9rem;
+  margin-bottom: 1.25rem;
+}
+
+.skirmish.engaged {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 1px rgba(224, 87, 78, 0.35), 0 0 18px rgba(224, 87, 78, 0.25);
+  animation: skirmish-pulse 1.6s ease-in-out infinite;
+}
+
+.skirmish.assault {
+  border-color: var(--amber);
+}
+
+.skirmish.won {
+  border-color: var(--accent);
+}
+
+@keyframes skirmish-pulse {
+  50% {
+    box-shadow: 0 0 0 1px rgba(224, 87, 78, 0.6), 0 0 26px rgba(224, 87, 78, 0.4);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skirmish.engaged {
+    animation: none;
+  }
+}
+
+.skirmish-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.6rem;
+}
+
+.skirmish-head h2 {
+  margin: 0;
+}
+
+.skirmish-chip {
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+.skirmish-chip.engaged {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.skirmish-chip.assault,
+.skirmish-chip.watch {
+  color: var(--amber);
+  border-color: var(--amber);
+}
+
+.skirmish-chip.won {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.skirmish-stats {
+  display: grid;
+  grid-template-columns: 2fr repeat(4, 1fr);
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.skirmish-stat .label {
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.skirmish-stat .value {
+  color: var(--accent);
+  font-size: 1.05rem;
+}
+
+.bar-fill.nest {
+  background: var(--danger);
+}
+
+.front {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem;
+  margin-bottom: 0.6rem;
+  font-size: 0.8rem;
+}
+
+.front.idle {
+  color: var(--text-dim);
+  border-style: dashed;
+}
+
+.front-title {
+  color: var(--text);
+  margin-bottom: 0.4rem;
+}
+
+.front-sides {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 0.5rem;
+  align-items: start;
+}
+
+.side.vs {
+  color: var(--danger);
+  font-weight: bold;
+  align-self: center;
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.chip {
+  display: grid;
+  grid-template-columns: 4.2rem 1fr 1.8rem;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: #1c2620;
+  overflow: hidden;
+}
+
+.chip-bar span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.chip.hostile .chip-bar span {
+  background: var(--danger);
+}
+
+.chip-hp {
+  color: var(--text-dim);
+  text-align: right;
+}
+
+.skirmish-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.76rem;
+  line-height: 1.55;
+}
+
+.skirmish-log li {
+  padding-left: 0.6rem;
+  border-left: 2px solid var(--border);
+  color: var(--text-dim);
+}
+
+.skirmish-log li.taken {
+  border-left-color: var(--danger);
+  color: #e8a39d;
+}
+
+.skirmish-log li.given {
+  border-left-color: var(--accent);
+  color: var(--text);
+}
+
+.skirmish-log li.fallen {
+  border-left-color: var(--danger);
+  color: var(--danger);
+  font-weight: bold;
+}
+
+.skirmish-log li.spawn {
+  border-left-color: var(--amber);
+}
+
+.skirmish-log li.milestone {
+  border-left-color: var(--amber);
+  color: var(--amber);
+}
+
+@media (max-width: 700px) {
+  .skirmish-stats {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
 .structures-heading {
   margin-top: 1rem;
 }
@@ -274,11 +523,34 @@ main {
 }
 
 .structure-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
   background: var(--panel-bg);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 0.5rem 0.8rem;
   font-size: 0.85rem;
+}
+
+.structure-row.open {
+  border-style: dashed;
+  opacity: 0.8;
+}
+
+.structure-icon {
+  flex: none;
+}
+
+.structure-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.structure-effect {
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  margin: 0.1rem 0 0.2rem;
 }
 
 .structure-row.building {
@@ -307,6 +579,173 @@ main {
 .structure-empty {
   color: var(--text-dim);
   font-size: 0.85rem;
+}
+
+.summary-page {
+  display: block;
+  max-width: 880px;
+  margin: 0 auto;
+}
+
+.banner-link {
+  margin-left: 1.25rem;
+  padding: 0.3rem 0.75rem;
+  color: inherit;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.banner-link:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.status-banner:not(.hidden) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.gameover-banner.waiting {
+  background: rgba(224, 184, 78, 0.08);
+  border: 1px solid var(--amber);
+}
+
+.gameover-banner.waiting h2 {
+  color: var(--amber);
+}
+
+.gameover-banner {
+  border-radius: 6px;
+  padding: 1.25rem 1.25rem 1rem;
+  margin-bottom: 1.25rem;
+  text-align: center;
+}
+
+.gameover-banner h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.5rem;
+  letter-spacing: 0.12em;
+}
+
+.gameover-banner p {
+  margin: 0;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.gameover-banner.won {
+  background: rgba(78, 224, 138, 0.1);
+  border: 1px solid var(--accent);
+}
+
+.gameover-banner.won h2 {
+  color: var(--accent);
+}
+
+.gameover-banner.lost {
+  background: rgba(224, 87, 78, 0.1);
+  border: 1px solid var(--danger);
+}
+
+.gameover-banner.lost h2 {
+  color: var(--danger);
+}
+
+.gameover-stats {
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  margin-bottom: 0.75rem;
+}
+
+.summary-page h3 {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin: 1.25rem 0 0.5rem;
+}
+
+.crew-table-wrap {
+  overflow-x: auto;
+}
+
+.crew-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.crew-table th,
+.crew-table td {
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.crew-table th {
+  color: var(--text-dim);
+  font-weight: normal;
+  font-size: 0.75rem;
+}
+
+.crew-table tr.fallen td {
+  color: var(--danger);
+}
+
+.crew-role {
+  display: block;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+}
+
+.moments {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.82rem;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.gameover-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: center;
+  margin-top: 1.5rem;
+}
+
+.gameover-btn {
+  display: inline-block;
+  text-decoration: none;
+  font: inherit;
+  letter-spacing: 0.05em;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.55rem 1.1rem;
+  cursor: pointer;
+}
+
+.gameover-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.gameover-btn.primary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.gameover-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .bar {
