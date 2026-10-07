@@ -217,6 +217,47 @@ def _crew_status_note(vacant_count: int, nearby_aliens: str, metal: int, energy:
 WIN_STRUCTURES_REQUIRED = 3  # must track engine.py's WIN_STRUCTURES_REQUIRED
 
 
+STRUCTURE_METAL_COST = 15  # must track engine.py's STRUCTURE_METAL_COST
+
+
+def build_colony_next_steps(world) -> str:
+    """What actually stands between the colony and winning right now, from live state. Victory
+    is WIN_STRUCTURES_REQUIRED complete structures and no hostiles left (engine.py's
+    _check_end_conditions). The colonists were told that rule once, in the abstract, and
+    wandered; naming the concrete next move (with the real metal cost and structure id to
+    compare against) is the same fix that worked for combat and crew rebuilds above."""
+    structures = list(world.structures.values())
+    steps = []
+    in_progress = [s for s in structures if s.build_progress < 100]
+    for s in in_progress:
+        steps.append(
+            f'{s.structure_type} {s.structure_id} is {s.build_progress}% built: build_structure with '
+            f'target_id "{s.structure_id}" at {s.sector_id} speeds it up.'
+        )
+    still_to_start = WIN_STRUCTURES_REQUIRED - len(structures)
+    if still_to_start > 0:
+        metal = world.colony_resources.metal
+        if metal >= STRUCTURE_METAL_COST:
+            steps.append(
+                f'{still_to_start} more structure(s) to start. The stockpile has metal={metal}: at '
+                'colony_core use build_structure with target_id "new:habitat".'
+            )
+        else:
+            steps.append(
+                f"{still_to_start} more structure(s) to start, each costing {STRUCTURE_METAL_COST} metal, "
+                f"and the stockpile has metal={metal}. Metal comes from resource_field_north: gather it, "
+                "then contribute_resources at colony_core."
+            )
+    if world.aliens:
+        steps.append(
+            f"{len(world.aliens)} hostile(s) are still alive and must all be destroyed to win. They "
+            "live at alien_nest. Go in healthy (health above 60) and use fire_weapon on each."
+        )
+    if not steps:
+        return ""
+    return "TO WIN, THE COLONY STILL NEEDS:\n" + "\n".join(f"- {step}" for step in steps)
+
+
 def build_sector_overview(world, current_sector: str) -> str:
     lines = ["KNOWN SECTORS (use explore_sector with the sector id as target_id to go there):"]
     for sector in world.sectors.values():
@@ -251,6 +292,9 @@ def build_sector_overview(world, current_sector: str) -> str:
         '"gather_resource" in a sector with no yield, and "explore_sector" on the sector you are '
         "already in once it is explored. Do something that changes the colony's situation."
     )
+    next_steps = build_colony_next_steps(world)
+    if next_steps:
+        lines.append(next_steps)
     return "\n".join(lines)
 
 

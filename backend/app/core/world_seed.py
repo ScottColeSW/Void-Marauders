@@ -107,8 +107,9 @@ def create_initial_world() -> Tuple[WorldState, Dict[str, AgentState]]:
         # variety still comes through via temperature and the system prompt
         # (see cognition.py/prompts.py) -- the sharper qwen2.5:3b goes to
         # roles where reasoning quality matters most (combat, command,
-        # vigilance), the lighter gemma2:2b to roles leaning more on flavor
-        # than precision. If your GPU has more headroom, feel free to spread
+        # vigilance), the lighter gemma2:2b to a role leaning more on flavor
+        # than precision. The medic started on gemma2:2b at 0.3 and idled
+        # every tick in a real run, so she is on qwen2.5:3b now. If your GPU has more headroom, feel free to spread
         # these back out to more distinct models per agent.
         "engineer_karl": AgentState(
             profile=AgentProfile(
@@ -139,8 +140,8 @@ def create_initial_world() -> Tuple[WorldState, Dict[str, AgentState]]:
                 name="Amara",
                 role="Medic",
                 personality_trait="Calm and dutiful, prioritizes crew welfare above all",
-                model="gemma2:2b",
-                temperature=0.3,
+                model="qwen2.5:3b",
+                temperature=0.7,
             ),
             current_sector="colony_core",
         ),

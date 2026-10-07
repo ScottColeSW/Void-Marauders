@@ -87,7 +87,7 @@ through via temperature and the system prompt (see `backend/app/core/world_seed.
 |---|---|---|---|
 | Karl (paranoid engineer) | `qwen2.5:3b` | 0.5 | the sharper of the two — suits a deliberate, suspicious engineer |
 | Valerie (impulsive pilot, captain) | `qwen2.5:3b` | 0.9 | sharper model, high temperature — reckless but still issues sane orders |
-| Amara (calm medic) | `gemma2:2b` | 0.3 | lighter model, low temperature — steady, mostly support actions |
+| Amara (calm medic) | `qwen2.5:3b` | 0.7 | sharper model at a middling temperature; on `gemma2:2b` at 0.3 she idled every tick |
 | Otieno (security officer) | `qwen2.5:3b` | 0.6 | sharper model — he's in combat most often, reasoning quality matters |
 | Priya (curious botanist) | `gemma2:2b` | 0.8 | lighter model, high temperature — flavor over precision |
 
@@ -137,7 +137,7 @@ their reasons and stay open (the judge never decides which side is right). Wheth
 
 > **Performance note:** a tick is one LLM call per colonist plus, with memory on, a couple of embedding calls each, so it takes a few seconds rather than the instant mock-mode tick (about 9 s on an RTX 2080 Super; it was about 14 s, and 30 s or more on the first ticks, before the changes below). The backend loads every model at startup and asks Ollama to keep them resident (`OLLAMA_KEEP_ALIVE`, default `30m`), caches embeddings it has already computed, and records each colonist's memory in the background while the next colonist is thinking. `TICK_INTERVAL_SECONDS` (default `1`) is only the pause *between* ticks, on top of the tick itself, so leave it small unless you want the colony slowed down on purpose. Running five *different* models can still exceed a small GPU's VRAM and force Ollama to reload them every tick. If it feels sluggish, point more agents at the same model in `world_seed.py`, or set `MEMORY_ENABLED=false` while iterating and turn it back on for the real demo.
 >
-> **Prompt note:** colonists now see a sector list (what each sector yields, what is still unexplored), colony progress, the captain's crew ids, and, when their last action did nothing, a one-line "LAST TURN WASTED" explanation. An 8-tick check before this change had four of five colonists repeating a no-op action every tick; after it, four of five travel, gather, explore or give valid orders (the medic, on the small `gemma2:2b`, still mostly idles). The benchmark and memory A/B numbers recorded in this README and in `docs/` predate this prompt, so re-run them before comparing against new results.
+> **Prompt note:** colonists now see a sector list (what each sector yields, what is still unexplored), colony progress, the captain's crew ids, and, when their last action did nothing, a one-line "LAST TURN WASTED" explanation. An 8-tick check before this change had four of five colonists repeating a no-op action every tick; after it, four of five travel, gather, explore or give valid orders (the medic, then on the small `gemma2:2b` at temperature 0.3, still idled, so she now runs `qwen2.5:3b` at 0.7). Each prompt also ends its map with a "TO WIN, THE COLONY STILL NEEDS" list built from live state: structures to start or finish, the metal that costs, and the hostiles at `alien_nest`. The benchmark and memory A/B numbers recorded in this README and in `docs/` predate this prompt, so re-run them before comparing against new results.
 
 ### Useful endpoints while it's running
 - `GET /state` — full world state (resources, sectors, aliens, structures) as JSON
