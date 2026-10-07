@@ -11,16 +11,21 @@ const RESOURCE_LABELS = { metal: "Metal", food: "Food", energy: "Energy", biomat
 // sectors or adjacency change, this table needs updating too -- there's no
 // way to derive positions from the backend since it doesn't model space,
 // only which-sector-connects-to-which.
+//
+// Laid out wide and short (3 rows, hub in the middle) so the whole map fits in
+// one screenful next to the colonist cards -- see MAP_VIEWBOX below.
 const SECTOR_LAYOUT = {
-  landing_ship: { x: 100, y: 220 },
-  colony_core: { x: 270, y: 220 },
-  resource_field_north: { x: 270, y: 80 },
-  resource_field_south: { x: 270, y: 360 },
-  geothermal_vent: { x: 430, y: 140 },
-  unexplored_east: { x: 430, y: 300 },
-  unexplored_west: { x: 100, y: 80 },
-  alien_nest: { x: 430, y: 420 },
+  unexplored_west: { x: 110, y: 45 },
+  resource_field_north: { x: 350, y: 45 },
+  geothermal_vent: { x: 590, y: 45 },
+  landing_ship: { x: 110, y: 130 },
+  colony_core: { x: 350, y: 130 },
+  unexplored_east: { x: 590, y: 130 },
+  resource_field_south: { x: 230, y: 215 },
+  alien_nest: { x: 470, y: 215 },
 };
+
+const MAP_VIEWBOX = "0 0 700 260";
 
 const SECTOR_LABELS = {
   landing_ship: "Landing Ship",
@@ -154,7 +159,7 @@ function renderMap(sectors, agents, aliens, structures) {
     })
     .join("");
 
-  el.innerHTML = `<svg viewBox="0 0 540 460" class="map-svg" role="img" aria-label="Colony sector map">${links}${tiles}</svg>`;
+  el.innerHTML = `<svg viewBox="${MAP_VIEWBOX}" class="map-svg" role="img" aria-label="Colony sector map">${links}${tiles}</svg>`;
 }
 
 function renderColonists(agents) {

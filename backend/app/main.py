@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.core import benchmark_db, memory
+from app.core import benchmark_db, cognition, memory
 from app.core.engine import get_engine
 
 # generate_report.py lives at the backend/ root (sibling of app/), not inside
@@ -22,7 +22,10 @@ import generate_report
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
-TICK_INTERVAL_SECONDS = float(os.getenv("TICK_INTERVAL_SECONDS", "15"))
+# Pause between the END of one tick and the start of the next. A tick is
+# already seconds long in LLM mode (and the loop waits for it), so this is only
+# a breather -- a large value here is pure dead time on top of every tick.
+TICK_INTERVAL_SECONDS = float(os.getenv("TICK_INTERVAL_SECONDS", "1"))
 
 _tick_task: Optional[asyncio.Task] = None
 
@@ -41,7 +44,11 @@ async def _tick_loop() -> None:
 async def lifespan(app: FastAPI):
     global _tick_task
     memory.warm_up()  # load the NLI judge in the background if MEMORY_JUDGE=nli, so the first tick doesn't wait for it
-    get_engine()  # seed the colony immediately so /state has data before the first tick
+    engine = get_engine()  # seed the colony immediately so /state has data before the first tick
+    # Load every model the colony uses into memory now, in the background, so
+    # the first ticks don't each pay a 10-20 s cold load.
+    cognition.warm_up(sorted({a.profile.model for a in engine.agents.values()}))
+    memory.warm_up_embeddings()
     _tick_task = asyncio.create_task(_tick_loop())
     yield
     if _tick_task:

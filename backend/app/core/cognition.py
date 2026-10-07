@@ -3,12 +3,36 @@ import os
 import random
 from typing import Tuple
 
-from app.core.prompts import build_prompt
+from app.core.prompts import build_prompt, build_sector_overview
 from app.schemas.agent import ActionType, AgentActionSchema, AgentPerception, AgentState
 from app.schemas.world import SectorType, WorldState
 
 COGNITION_MODE = os.getenv("COGNITION_MODE", "llm").lower()
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+# Ollama unloads an idle model after 5 minutes by default, and a reload costs
+# 10-20 s on this hardware. Keep them resident for the length of a play session.
+KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+
+
+def warm_up(models: list) -> None:
+    """Load each model into Ollama now, in the background, so no tick pays the
+    cold-load. An empty prompt loads the model without generating anything.
+    Best-effort: a failure here just means the first real call loads it."""
+    if COGNITION_MODE != "llm":
+        return
+    import threading
+
+    def _load() -> None:
+        import ollama
+
+        client = ollama.Client(host=OLLAMA_HOST)
+        for model in models:
+            try:
+                client.generate(model=model, prompt="", keep_alive=KEEP_ALIVE)
+            except Exception:
+                pass
+
+    threading.Thread(target=_load, name="ollama-warmup", daemon=True).start()
 
 
 def decide(
@@ -22,7 +46,7 @@ def decide(
     Dominion's fallback_total metric tracks for its own scripted fallback."""
     if COGNITION_MODE == "llm":
         try:
-            return _llm_decide(agent, perception), False
+            return _llm_decide(agent, perception, world), False
         except Exception as exc:
             # A single flaky/hallucinated LLM response should never take down
             # the whole tick loop — fall back to a safe no-op for this agent.
@@ -180,7 +204,7 @@ def _mock_decide(
     )
 
 
-def _llm_decide(agent: AgentState, perception: AgentPerception) -> AgentActionSchema:
+def _llm_decide(agent: AgentState, perception: AgentPerception, world: WorldState) -> AgentActionSchema:
     import ollama
 
     prompt = build_prompt(
@@ -205,6 +229,9 @@ def _llm_decide(agent: AgentState, perception: AgentPerception) -> AgentActionSc
         captain_name=perception.captain_name,
         crew_vacancies=perception.crew_vacancies,
         retrieved_memories="\n".join(perception.retrieved_memories) or "None yet.",
+        sector_overview=build_sector_overview(world, perception.current_sector),
+        crew_roster=perception.crew_roster,
+        last_result=perception.last_result or "",
     )
 
     client = ollama.Client(host=OLLAMA_HOST)
@@ -213,6 +240,7 @@ def _llm_decide(agent: AgentState, perception: AgentPerception) -> AgentActionSc
         prompt=prompt,
         format=AgentActionSchema.model_json_schema(),
         options={"temperature": agent.profile.temperature},
+        keep_alive=KEEP_ALIVE,
     )
     payload = json.loads(response["response"])
     return AgentActionSchema.model_validate(payload)

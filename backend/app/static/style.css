@@ -181,6 +181,9 @@ main {
 .map-svg {
   width: 100%;
   height: auto;
+  /* Never taller than what's left of the viewport under the header and stat
+     row, so the whole map is always in one screenful. */
+  max-height: 55vh;
   display: block;
 }
 

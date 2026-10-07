@@ -1,6 +1,7 @@
 import random
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from app.core import cognition, memory
@@ -283,24 +284,98 @@ class WorldEngine:
     # -- agents (cognition) --------------------------------------------------
 
     def _agent_step(self, health_at_tick_start: dict) -> None:
-        for agent in self.agents.values():
-            if agent.health <= 0:
-                continue
-            if agent.pending_order and self._resolve_pending_order(agent, health_at_tick_start):
-                continue  # complied — this tick's turn is already spent
-            perception = self._build_perception(agent)
-            action, fallback = cognition.decide(agent, perception, self.world)
-            self._record_action_stats(agent, action, fallback)
-            if action.spoken_dialogue:
-                self._log(f'{agent.profile.name}: "{action.spoken_dialogue}"')
-            self._resolve_action(agent, action)
-            memory.record_action(
-                self._memory_id(agent.profile.agent_id),
-                action,
-                current_sector=agent.current_sector,
-                nearby_aliens=perception.nearby_aliens,
-                crew_names=self._crew_names(),
+        # record_action embeds the colonist's log line (a ~0.5 s Ollama call). Doing that inline
+        # put it on the critical path five times a tick; handing it to one background worker
+        # lets it overlap with the next colonist's LLM call instead. One worker, not several, so
+        # these writes stay in order and never race each other. Each colonist only ever touches
+        # their own store, and the next tick's recall waits on the join below.
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="memory-record") as recorder:
+            pending = []
+            for agent in self.agents.values():
+                if agent.health <= 0:
+                    continue
+                if agent.pending_order and self._resolve_pending_order(agent, health_at_tick_start):
+                    continue  # complied — this tick's turn is already spent
+                perception = self._build_perception(agent)
+                action, fallback = cognition.decide(agent, perception, self.world)
+                self._record_action_stats(agent, action, fallback)
+                if action.spoken_dialogue:
+                    self._log(f'{agent.profile.name}: "{action.spoken_dialogue}"')
+                agent.last_result = self._noop_reason(agent, action)
+                self._resolve_action(agent, action)
+                pending.append(
+                    recorder.submit(
+                        memory.record_action,
+                        self._memory_id(agent.profile.agent_id),
+                        action,
+                        current_sector=agent.current_sector,
+                        nearby_aliens=perception.nearby_aliens,
+                        crew_names=self._crew_names(),
+                    )
+                )
+            for future in pending:
+                future.result()  # surface any error here, same as the inline call did
+
+    def _gather_means_travel(self, agent: AgentState, action: AgentActionSchema) -> bool:
+        """True when a gather_resource names a different sector that has something to gather."""
+        target = self.world.sectors.get(action.target_id or "")
+        return bool(
+            target
+            and target.sector_id != agent.current_sector
+            and target.explored
+            and target.resource_yield
+        )
+
+    def _noop_reason(self, agent: AgentState, action: AgentActionSchema) -> Optional[str]:
+        """Why this action will accomplish nothing, or None if it will do something. Checked
+        against the state the action is about to resolve in, and fed back to the colonist on
+        their next turn (prompts.py's LAST TURN block). A real 8-tick run had four of five
+        colonists repeating one dead action forever -- rest at full health, gather where nothing
+        grows, repair_hull, explore the sector they stood in -- because nothing ever told them
+        it was dead. Mirrors _resolve_action's own conditions; it only describes, never gates."""
+        kind = action.action_type
+        sector = self.world.sectors.get(agent.current_sector)
+        if kind == ActionType.IDLE:
+            return "idle does nothing."
+        if kind == ActionType.REPAIR_HULL:
+            return "repair_hull has no effect."
+        if kind == ActionType.REST and agent.health >= 100:
+            return "you are at full health, so rest did nothing."
+        if (
+            kind == ActionType.GATHER_RESOURCE
+            and not self._gather_means_travel(agent, action)
+            and not (sector and sector.resource_yield)
+        ):
+            return (
+                f"{agent.current_sector} has nothing to gather. Name a resource field from the "
+                "KNOWN SECTORS list as target_id to go there and gather."
             )
+        if kind == ActionType.EXPLORE_SECTOR:
+            target = action.target_id or agent.current_sector
+            if target not in self.world.sectors:
+                return f'"{target}" is not a sector id. Use one from the KNOWN SECTORS list.'
+            if target == agent.current_sector and self.world.sectors[target].explored:
+                return (
+                    f"you are already in {target} and it is explored. Pick a different sector id "
+                    "as target_id (null or your own sector means no move)."
+                )
+        if kind == ActionType.CONTRIBUTE_RESOURCES:
+            held = sum(getattr(agent.personal_stock, f) for f in ("metal", "food", "energy", "biomatter"))
+            if agent.current_sector != "colony_core":
+                return "you can only contribute at colony_core."
+            if held == 0:
+                return "you hold no personal stock to contribute."
+        if kind == ActionType.ISSUE_ORDER:
+            if not agent.profile.is_captain:
+                return "only the captain can issue orders."
+            if action.target_id not in self.agents or action.target_id == agent.profile.agent_id:
+                return (
+                    f'"{action.target_id}" is not a crew id, so no order was given. target_id '
+                    "must be a crewmate's id from your crew list, never a sector."
+                )
+            if not action.order_action:
+                return "no order_action was set, so no order was given."
+        return None
 
     def _record_action_stats(
         self, agent: AgentState, action: AgentActionSchema, fallback: bool = False
@@ -440,6 +515,12 @@ class WorldEngine:
             stress_level=agent.stress_level,
             captain_name=captain_name,
             crew_vacancies=crew_vacancies,
+            last_result=agent.last_result,
+            crew_roster=[
+                f"{other.profile.agent_id} ({other.profile.name}, at {other.current_sector})"
+                for other in self.agents.values()
+                if other.profile.agent_id != agent.profile.agent_id and other.health > 0
+            ],
             retrieved_memories=memory.recall(
                 self._memory_id(agent.profile.agent_id),
                 current_sector=agent.current_sector,
@@ -457,7 +538,16 @@ class WorldEngine:
     def _resolve_action(self, agent: AgentState, action: AgentActionSchema) -> None:
         sector = self.world.sectors.get(agent.current_sector)
 
-        if action.action_type == ActionType.GATHER_RESOURCE and sector:
+        if action.action_type == ActionType.GATHER_RESOURCE and self._gather_means_travel(agent, action):
+            # A colonist who says "gather at resource_field_north" while standing elsewhere
+            # clearly means "go there and gather" -- real runs had small models repeat exactly
+            # that every tick from colony_core, never arriving, because gathering only ever
+            # happened where they stood. Honor the intent as the first half of the trip; the
+            # gather itself happens on their next turn, once they're actually there.
+            self._log(f"{agent.profile.name} heads for {action.target_id} to gather.")
+            self._resolve_explore(agent, action)
+
+        elif action.action_type == ActionType.GATHER_RESOURCE and sector:
             if sector.resource_yield:
                 # Gathered resources go to the colonist's own personal_stock,
                 # not the shared pool directly -- they have to actively

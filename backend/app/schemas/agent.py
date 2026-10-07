@@ -107,6 +107,10 @@ class AgentState(BaseModel):
     # the fixed 5-slot roster everything else assumes stay untouched. See
     # engine.py's _resolve_build_crew_unit.
     generation: int = 1
+    # Why this colonist's previous action accomplished nothing, or None if it did something.
+    # Shown back to them next turn -- see engine.py's _noop_reason. Small models repeat a dead
+    # action forever when nothing tells them it was dead.
+    last_result: Optional[str] = None
 
 
 class AgentPerception(BaseModel):
@@ -121,6 +125,11 @@ class AgentPerception(BaseModel):
     stress_level: int
     captain_name: str
     crew_vacancies: int = 0
+    # Every living crewmate as "agent_id (Name)", wherever they are -- nearby_crew only lists
+    # those in the same sector, but issue_order can target anyone, and the captain needs the
+    # ids to do it (a real run had the captain order a sector id instead, a silent no-op).
+    crew_roster: List[str] = Field(default_factory=list)
+    last_result: Optional[str] = None
     retrieved_memories: List[str] = Field(default_factory=list)
 
 

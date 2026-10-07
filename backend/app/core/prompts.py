@@ -41,6 +41,9 @@ Sectors connect through colony_core only. One move from colony_core reaches anyw
 outlying sector to another takes two moves, through colony_core. Target the same distant sector
 again next turn to continue the trip.
 
+{sector_overview}
+{last_result}
+
 HISTORICAL MEMORIES EXTRACTED FROM YOUR BRAIN:
 {retrieved_memories}
 
@@ -203,6 +206,54 @@ def _crew_status_note(vacant_count: int, nearby_aliens: str, metal: int, energy:
     )
 
 
+# A real 8-tick run (see README) found four of five colonists repeating one action with no effect
+# every tick: rest at full health, gather_resource on the empty landing_ship, idle, repair_hull,
+# and the fifth exploring the sector she already stood in. The prompt named no sector but the
+# colonist's own, colony_core and alien_nest, so nobody could know resource_field_north existed or
+# what any sector held, while four legal actions cost nothing and did nothing. This block is the
+# map and the progress report the model was missing, plus a plain statement of which actions are
+# dead ends -- same lesson as THREAT_WARNING and the reminders above: a number or a name the model
+# can compare against beats a general description it has to infer from.
+WIN_STRUCTURES_REQUIRED = 3  # must track engine.py's WIN_STRUCTURES_REQUIRED
+
+
+def build_sector_overview(world, current_sector: str) -> str:
+    lines = ["KNOWN SECTORS (use explore_sector with the sector id as target_id to go there):"]
+    for sector in world.sectors.values():
+        here = " <- you are here" if sector.sector_id == current_sector else ""
+        kind = sector.sector_type.value
+        if not sector.explored:
+            detail = "unexplored, contents unknown until someone explores it"
+        elif sector.resource_yield:
+            yields = ", ".join(f"{res.value} ~{amount}" for res, amount in sector.resource_yield.items())
+            detail = f"gather_resource yields {yields} per visit"
+        elif kind == "colony_core":
+            detail = "the base: contribute_resources and build here"
+        else:
+            detail = "nothing to gather here"
+        lines.append(f"- {sector.sector_id}: {detail}{here}")
+
+    structures = list(world.structures.values())
+    done = sum(1 for s in structures if s.build_progress >= 100)
+    building = [f"{s.structure_type} {s.build_progress}%" for s in structures if s.build_progress < 100]
+    progress = f"Colony progress: {done}/{WIN_STRUCTURES_REQUIRED} structures complete"
+    if building:
+        progress += f" (in progress: {', '.join(building)})"
+    progress += f". Victory needs {WIN_STRUCTURES_REQUIRED} complete and no hostiles left."
+    lines.append(progress)
+    lines.append(
+        '"gather_resource" collects from the sector you are standing in. Naming another sector with a '
+        "yield as its target_id sends you there this turn, and you gather on your next turn. "
+        '"contribute_resources" does nothing unless you are at colony_core holding personal stock.'
+    )
+    lines.append(
+        'Actions that accomplish nothing: "idle", "repair_hull", "rest" while health is 100, '
+        '"gather_resource" in a sector with no yield, and "explore_sector" on the sector you are '
+        "already in once it is explored. Do something that changes the colony's situation."
+    )
+    return "\n".join(lines)
+
+
 def build_prompt(
     *,
     is_captain: bool = False,
@@ -217,6 +268,9 @@ def build_prompt(
     personal_biomatter: int,
     captain_name: str,
     crew_vacancies: int = 0,
+    sector_overview: str = "",
+    crew_roster=(),
+    last_result: str = "",
     **kwargs,
 ) -> str:
     """Fill BASE_COGNITIVE_PROMPT, auto-injecting the valid action list, chain of command, and
@@ -226,6 +280,12 @@ def build_prompt(
         if is_captain
         else CREW_CHAIN_OF_COMMAND_TEMPLATE.format(loyalty=loyalty, captain_name=captain_name)
     )
+    if is_captain and crew_roster:
+        chain_of_command += (
+            "\nCrew you can order -- target_id must be one of these ids exactly, never a sector: "
+            + "; ".join(crew_roster)
+            + "."
+        )
     threat_warning = THREAT_WARNING if nearby_aliens != "none" else ""
     contribution_reminder = _contribution_reminder(
         current_sector, personal_metal, personal_food, personal_energy, personal_biomatter,
@@ -246,5 +306,11 @@ def build_prompt(
         personal_biomatter=personal_biomatter,
         contribution_reminder=contribution_reminder,
         crew_status_note=crew_status_note,
+        sector_overview=sector_overview,
+        last_result=(
+            f"LAST TURN WASTED: {last_result} Choose a different action this turn."
+            if last_result
+            else ""
+        ),
         **kwargs,
     )

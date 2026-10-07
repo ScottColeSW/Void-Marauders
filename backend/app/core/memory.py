@@ -209,19 +209,44 @@ def decay_all() -> None:
 
 # -- embeddings (best-effort, only used to rank personal_log recall) -----
 
+# Recall embeds a query like "sector X, crew [...], aliens [...]" that is identical on every
+# tick a colonist's surroundings don't change, and a stuck colonist records the same log line
+# over and over -- both were paying a full ~0.5 s Ollama round trip for a vector already
+# computed. The cache is bounded and simply cleared when full: the text space is tiny.
+_EMBED_CACHE_MAX = 512
+_embed_cache: Dict[str, List[float]] = {}
+EMBED_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+
+
 def _embed(text: str) -> Optional[List[float]]:
     global _embed_unavailable_until
+    cached = _embed_cache.get(text)
+    if cached is not None:
+        return cached
     if time.monotonic() < _embed_unavailable_until:
         return None
     try:
         import ollama
 
         client = ollama.Client(host=OLLAMA_HOST)
-        response = client.embeddings(model=EMBED_MODEL, prompt=text)
-        return response["embedding"]
+        response = client.embeddings(model=EMBED_MODEL, prompt=text, keep_alive=EMBED_KEEP_ALIVE)
+        vector = response["embedding"]
     except Exception:
         _embed_unavailable_until = time.monotonic() + EMBED_FAILURE_COOLDOWN_SECONDS
         return None
+    if len(_embed_cache) >= _EMBED_CACHE_MAX:
+        _embed_cache.clear()
+    _embed_cache[text] = vector
+    return vector
+
+
+def warm_up_embeddings() -> None:
+    """Load the embedding model in the background so the first recall doesn't wait for it."""
+    if not MEMORY_ENABLED:
+        return
+    import threading
+
+    threading.Thread(target=_embed, args=("warm up",), name="embed-warmup", daemon=True).start()
 
 
 def _cosine(a: List[float], b: List[float]) -> float:
