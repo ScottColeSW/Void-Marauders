@@ -7,7 +7,7 @@ from app.core.prompts import build_prompt
 from app.schemas.agent import ActionType, AgentActionSchema, AgentPerception, AgentState
 from app.schemas.world import SectorType, WorldState
 
-COGNITION_MODE = os.getenv("COGNITION_MODE", "mock").lower()
+COGNITION_MODE = os.getenv("COGNITION_MODE", "llm").lower()
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 
 

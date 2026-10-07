@@ -53,12 +53,12 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-`.env.example`'s defaults (`COGNITION_MODE=mock`, `MEMORY_ENABLED=false`) are already this fastest path — no edits needed.
-
 Run it:
 ```bash
-uvicorn app.main:app --reload
+python run.py --mock
 ```
+
+(`python run.py` with no flag uses the defaults, `COGNITION_MODE=llm` and `MEMORY_ENABLED=true`; see the full experience below.)
 
 Open **http://127.0.0.1:8000/** — that's the live dashboard. It polls the backend every 2 seconds; you'll see colonists gather resources, build structures, and fight off aliens in real time.
 
@@ -106,17 +106,15 @@ up the models you want resident at once and leave a couple GB of headroom for co
 
 **3. Configure and run the backend**
 
-In `backend/.env` (see `.env.example` for the full list), flip the two fast-path defaults:
-```
-COGNITION_MODE=llm
-MEMORY_ENABLED=true
-```
+`COGNITION_MODE=llm` and `MEMORY_ENABLED=true` are the defaults (see `backend/.env.example` for the full list), so:
 
 ```bash
 cd backend
 venv\Scripts\activate
-uvicorn app.main:app --reload
+python run.py
 ```
+
+Options: `--mock` (mock brain, memory off), `--port N`, `--host H`, `--no-reload`.
 
 Open **http://127.0.0.1:8000/** as before. Agent monologue/dialogue is now real LLM output, and agents recall relevant past events — plus their standing reads on crewmates and sectors, including any unresolved contradictions — each tick.
 
